@@ -53,6 +53,8 @@ image:
 stage: image
 	@case "$(VERSION)" in *-dirty|dev) echo "refusing to stage VERSION=$(VERSION); commit and tag first" >&2; exit 1;; esac
 	@mkdir -p bin
+	@# podman save refuses to write over an existing archive.
+	rm -f bin/$(TARBALL)
 	podman save -o bin/$(TARBALL) $(IMAGE):$(VERSION)
 	sudo install -d -o nginx -g nginx -m 0755 $(STAGE_DIR)
 	sudo install -o nginx -g nginx -m 0644 bin/$(TARBALL) $(STAGE_DIR)/$(TARBALL)
