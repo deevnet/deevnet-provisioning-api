@@ -17,9 +17,9 @@ ARG COMMIT=unknown
 ARG BUILT=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w \
-        -X github.com/deevnet/deevnet-api/internal/version.Version=${VERSION} \
-        -X github.com/deevnet/deevnet-api/internal/version.Commit=${COMMIT} \
-        -X github.com/deevnet/deevnet-api/internal/version.Built=${BUILT}" \
+        -X github.com/deevnet/deevnet-provisioning-api/internal/version.Version=${VERSION} \
+        -X github.com/deevnet/deevnet-provisioning-api/internal/version.Commit=${COMMIT} \
+        -X github.com/deevnet/deevnet-provisioning-api/internal/version.Built=${BUILT}" \
       -o /out/deevnet-api ./cmd/deevnet-api
 
 # Static binary, no shell, no package manager, non-root.

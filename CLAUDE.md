@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`deevnet-api` is the Deevnet API (ADR-0012 in `deevnet-docs`): a Go HTTP service that tenant
+`deevnet-provisioning-api` builds the Deevnet API (ADR-0012 in `deevnet-docs`): a Go HTTP service that tenant
 Terraform reaches through the `deevnet/deevnet` provider. It is **provisioning-only**. Nothing at
 runtime (devices, brokers, the AP) depends on it being up.
 
 Today it is a shell: health, readiness, version, and a token-gated `/v1` that returns 501.
+
+The repository name says what the service is for; the service itself, its binary, image and
+container keep the short name `deevnet-api`, which is what the `deevnet.mgmt` `deevnet_api` role
+and the staged image path use.
 
 ## Commands
 

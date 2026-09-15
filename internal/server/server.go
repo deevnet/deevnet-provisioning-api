@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/deevnet/deevnet-api/internal/auth"
-	"github.com/deevnet/deevnet-api/internal/version"
+	"github.com/deevnet/deevnet-provisioning-api/internal/auth"
+	"github.com/deevnet/deevnet-provisioning-api/internal/version"
 )
 
 // Pinger is the part of the database pool readiness needs. *pgxpool.Pool

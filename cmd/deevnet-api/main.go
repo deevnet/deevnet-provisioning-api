@@ -20,8 +20,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/deevnet/deevnet-api/internal/server"
-	"github.com/deevnet/deevnet-api/internal/version"
+	"github.com/deevnet/deevnet-provisioning-api/internal/server"
+	"github.com/deevnet/deevnet-provisioning-api/internal/version"
 )
 
 func main() {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/deevnet/deevnet-api/internal/version"
+	"github.com/deevnet/deevnet-provisioning-api/internal/version"
 )
 
 type fakeDB struct{ err error }

@@ -1,4 +1,4 @@
-module github.com/deevnet/deevnet-api
+module github.com/deevnet/deevnet-provisioning-api
 
 go 1.25.0
 

@@ -1,9 +1,12 @@
-# deevnet-api
+# deevnet-provisioning-api
 
 The Deevnet API: the provisioning service behind the `deevnet/deevnet` Terraform provider
 ([ADR-0012](https://deevnet.github.io/deevnet-docs/docs/architecture/decisions/0012-iot-platform-api/)).
 Tenants declare devices and bindings in their own Terraform, and the API applies them to the
 substrate services that implement them.
+
+The repository is `deevnet-provisioning-api`; the service it builds, and its binary, image and
+container, are `deevnet-api`.
 
 **This is the shell.** It serves health, readiness and version, and puts every `/v1` route behind a
 bearer token, where each route answers `501 not implemented`. The device registry, Wi-Fi key and
