@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -54,6 +55,46 @@ func lowest(held map[int]string) (int, error) {
 		}
 	}
 	return 0, tenant.ErrExhausted
+}
+
+// A Transit key that no longer exists is what a rebuilt OpenBao leaves behind
+// (ADR-0016 §6). The tenant must still read back, so its own state can supply
+// the secrets again; failing the read would make it unable to authenticate and
+// close the only way back.
+type refusingSealer struct{}
+
+func (refusingSealer) Seal(_ context.Context, plaintext string) (string, error) {
+	return "vault:v1:" + plaintext, nil
+}
+
+func (refusingSealer) Open(_ context.Context, _ string) (string, error) {
+	return "", errors.New("decrypt: key not found")
+}
+
+func TestASecretThatWillNotOpenLosesTheSecretNotTheTenant(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+	secrets := tenant.Secrets{TSIG: "tsig-secret", State: "state-secret", APITokenHash: tenant.HashToken("t")}
+	rec, err := p.Create(ctx, "tprobe", secrets, lowest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// From here the key that wrote those columns is gone.
+	p.WithSealer(refusingSealer{})
+	got, err := p.Get(ctx, "tprobe")
+	if err != nil {
+		t.Fatalf("the tenant must still read back: %v", err)
+	}
+	if got.Index != rec.Index || got.Name != "tprobe" {
+		t.Errorf("record came back wrong: %+v", got)
+	}
+	if got.Secrets.TSIG != "" || got.Secrets.State != "" {
+		t.Errorf("an unreadable secret must read as empty, got %q / %q", got.Secrets.TSIG, got.Secrets.State)
+	}
+	if !bytes.Equal(got.Secrets.APITokenHash, tenant.HashToken("t")) {
+		t.Error("the token hash is not sealed and must survive, or the tenant cannot authenticate")
+	}
 }
 
 func TestStoreLifecycle(t *testing.T) {

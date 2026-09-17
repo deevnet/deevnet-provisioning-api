@@ -82,7 +82,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	tenants := w.tenants
-	reg := store.New(pool)
+	reg := store.New(pool).WithLogger(logger)
 	if w.sealer != nil {
 		reg.WithSealer(w.sealer)
 	}
