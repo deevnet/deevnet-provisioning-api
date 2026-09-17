@@ -403,7 +403,7 @@ func (s *Service) CreateWorkload(ctx context.Context, tenantName string, req Wor
 	}
 	// The API publishes a workload's own name (ADR-0015 §13).
 	if err := s.DNS.EnsureRecords(ctx, s.Site.Zone(tenantName), s.Site.Numbering(rec.Index).ReverseZone,
-		[]DNSRecord{{Name: w.Name, Address: w.Address}}); err != nil {
+		[]DNSRecord{{Name: w.Name, Address: w.Address, Reverse: true}}); err != nil {
 		s.logger().Error("publishing workload", "tenant", tenantName, "workload", w.Name, "err", err)
 		return w, &StepError{Step: StepDNS, Err: err}
 	}
@@ -445,7 +445,7 @@ func (s *Service) DeleteWorkload(ctx context.Context, tenantName, name string) e
 		}
 	}
 	if err := s.DNS.RemoveRecords(ctx, s.Site.Zone(tenantName), s.Site.Numbering(rec.Index).ReverseZone,
-		[]DNSRecord{{Name: w.Name, Address: w.Address}}); err != nil {
+		[]DNSRecord{{Name: w.Name, Address: w.Address, Reverse: true}}); err != nil {
 		return &StepError{Step: StepDNS, Err: err}
 	}
 	s.audit(ctx, "workload-delete", tenantName, map[string]any{"workload": name, "vmid": w.VMID})

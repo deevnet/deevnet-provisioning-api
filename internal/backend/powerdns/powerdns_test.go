@@ -228,7 +228,7 @@ func TestRecordsArePublishedAndRemoved(t *testing.T) {
 	}
 
 	zone, reverse := "tprobe.mobile.deevnet.net", "190.20.10.in-addr.arpa"
-	recs := []tenant.DNSRecord{{Name: "web", Address: "10.20.190.10"}}
+	recs := []tenant.DNSRecord{{Name: "web", Address: "10.20.190.10", Reverse: true}}
 	if err := c.EnsureRecords(ctx, zone, reverse, recs); err != nil {
 		t.Fatalf("ensure records: %v", err)
 	}
@@ -240,6 +240,27 @@ func TestRecordsArePublishedAndRemoved(t *testing.T) {
 	}
 	if got := rrsetContent(t, c, reverse, "10.190.20.10.in-addr.arpa.", "PTR"); got != "web."+fqdn(zone) {
 		t.Fatalf("PTR = %q", got)
+	}
+
+	// A name beside the workload's is an alias: it publishes the A record and
+	// leaves the PTR with the workload that owns the address. Several aliases
+	// may share one address, and whichever was written last would otherwise
+	// claim the reverse.
+	alias := []tenant.DNSRecord{{Name: "service", Address: "10.20.190.10"}}
+	if err := c.EnsureRecords(ctx, zone, reverse, alias); err != nil {
+		t.Fatalf("ensure alias: %v", err)
+	}
+	if got := rrsetContent(t, c, zone, "service."+fqdn(zone), "A"); got != "10.20.190.10" {
+		t.Fatalf("alias A record = %q", got)
+	}
+	if got := rrsetContent(t, c, reverse, "10.190.20.10.in-addr.arpa.", "PTR"); got != "web."+fqdn(zone) {
+		t.Fatalf("after the alias, PTR = %q, want the workload's own name", got)
+	}
+	if err := c.RemoveRecords(ctx, zone, reverse, alias); err != nil {
+		t.Fatalf("remove alias: %v", err)
+	}
+	if got := rrsetContent(t, c, reverse, "10.190.20.10.in-addr.arpa.", "PTR"); got != "web."+fqdn(zone) {
+		t.Fatalf("removing the alias took the workload's PTR with it: %q", got)
 	}
 
 	// A tenant's own records, written over RFC 2136, are never touched.

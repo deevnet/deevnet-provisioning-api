@@ -331,6 +331,11 @@ func (c *Client) records(ctx context.Context, zone, reverseZone string, recs []t
 			Name: fqName, Type: "A", TTL: recordTTL, ChangeType: change,
 			Records: records(change, r.Address),
 		})
+		// Only the name that owns the address publishes the PTR. See
+		// tenant.DNSRecord.Reverse.
+		if !r.Reverse {
+			continue
+		}
 		ptr, err := ptrName(r.Address)
 		if err != nil {
 			return err
@@ -343,8 +348,12 @@ func (c *Client) records(ctx context.Context, zone, reverseZone string, recs []t
 	if err := c.do(ctx, http.MethodPatch, "/zones/"+url.PathEscape(fqdn(zone)), map[string]any{"rrsets": forward}, nil); err != nil {
 		return fmt.Errorf("zone %s: %w", zone, err)
 	}
-	if err := c.do(ctx, http.MethodPatch, "/zones/"+url.PathEscape(fqdn(reverseZone)), map[string]any{"rrsets": reverse}, nil); err != nil {
-		return fmt.Errorf("zone %s: %w", reverseZone, err)
+	// An alias-only batch has nothing for the reverse zone, and PowerDNS
+	// rejects a PATCH with an empty rrsets list.
+	if len(reverse) > 0 {
+		if err := c.do(ctx, http.MethodPatch, "/zones/"+url.PathEscape(fqdn(reverseZone)), map[string]any{"rrsets": reverse}, nil); err != nil {
+			return fmt.Errorf("zone %s: %w", reverseZone, err)
+		}
 	}
 	return nil
 }
