@@ -1,13 +1,52 @@
 # Deevnet API v1: tenants
 
-The tenant slice of ADR-0015: *Tenants Are Onboarded Through the Deevnet API*. Every route below
-takes the operator token, `Authorization: Bearer <DEEVNET_API_TOKEN>`. Tenant routes answer `501`
-until the API is configured with a site (`DEEVNET_SITE` and the rest, see the README), and `503`
-until its database schema is migrated.
+The tenant slice of ADR-0015 (*Tenants Are Built Through the Deevnet API*), with credentials and
+TLS from OpenBao (ADR-0016). Tenant routes answer `501` until the API is configured with a site
+(`DEEVNET_SITE` and the rest, see the README), and `503` until its database schema is migrated.
+
+## Who can call what
+
+Every `/v1` request carries `Authorization: Bearer <token>`. The token is one of three things.
+
+| Token | What it is | Can |
+|---|---|---|
+| **Operator** | `DEEVNET_API_TOKEN` | everything |
+| **Tenant** | `dvt1.<tenant>.<nonce>.<mac>`, returned by create | read and delete its own tenant, restore itself, and its own future resources. Asking for another tenant answers `404`; operator-only routes answer `403`. |
+| **Enrollment** | single-use, from `POST /v1/admissions` | create the tenant it was issued for, once. Nothing else. |
+
+**How a tenant token is checked.** It carries a MAC keyed by `token_hmac_key`, which lives in
+OpenBao, not in the registry.
+- **Registered tenant:** the token is also checked against the hash the registry holds, so a
+  replaced token is revoked.
+- **Registry lost:** a genuine token still identifies its tenant, and may create (restore) that
+  tenant and nothing else.
+
+## Admit a tenant
+
+`POST /v1/admissions`, operator only.
+
+```json
+{ "name": "tdemo" }
+```
+
+`201`:
+
+```json
+{ "name": "tdemo", "enrollment_token": "s.…", "expires_at": "2026-09-20T16:58:53Z" }
+```
+
+The token is OpenBao response wrapping: single-use, and valid for `DEEVNET_ENROLLMENT_TTL`
+(default 72h). Deliver it to the tenant repository age-encrypted (ADR-0012 §9).
+- **Presenting it for another name spends it** and answers `401`.
+- **Admitting a registered name** answers `409`.
+- **Without OpenBao configured**, admissions answer `501`, and only the operator creates tenants.
 
 ## Create, restore or resume a tenant
 
-`POST /v1/tenants`
+`POST /v1/tenants`, by any of:
+- the operator
+- the holder of an enrollment token for `name`, which spends it
+- the tenant itself, with its own token: a resume, or a restore after the registry was lost
 
 ```json
 { "name": "tdemo" }
@@ -28,6 +67,7 @@ A **restore** sends back what the tenant's state holds: the index and all three 
 | Field | Rules |
 |---|---|
 | `name` | `^[a-z][a-z0-9]{0,7}$`: the PVE SDN zone ID, a DNS label, a state-store user |
+| `api_token` | on a restore, must be a token the API issued for `name` |
 | `index` | optional, 1-62. 63 is reserved for drills and never allocated |
 | secrets | all three or none |
 
@@ -108,18 +148,19 @@ Step error text is never returned: it can name backend hosts. It is in the log a
 
 ## Read
 
-- `GET /v1/tenants/{name}`: the tenant, without secrets. `404` if not registered.
-- `GET /v1/tenants`: `{"tenants": [...]}` by index, without secrets.
+- `GET /v1/tenants/{name}`: the tenant, without secrets. `404` if not registered. Operator, or the
+  tenant itself.
+- `GET /v1/tenants`: `{"tenants": [...]}` by index, without secrets. Operator only.
 
 ## Reconcile
 
-`POST /v1/tenants/{name}/reconcile` re-ensures every backend with the secrets the registry holds.
+`POST /v1/tenants/{name}/reconcile`, operator only, re-ensures every backend with the secrets the registry holds.
 It is the repair after a backend is rebuilt. It returns the tenant with `outcome: reconciled` and no
 secrets, or `502` as create does.
 
 ## Delete
 
-`DELETE /v1/tenants/{name}`
+`DELETE /v1/tenants/{name}`: operator, or the tenant itself.
 
 | Status | When |
 |---|---|
@@ -130,5 +171,13 @@ secrets, or `502` as create does.
 
 ## Egress list
 
-`GET /v1/fabric/egress` returns `{"vrfs": [{"tenant": "eds", "vrf": "vrf_eds"}]}` for every
+`GET /v1/fabric/egress`, operator only, returns `{"vrfs": [{"tenant": "eds", "vrf": "vrf_eds"}]}` for every
 `ready` tenant. It is what the exit node's agent will read (ADR-0015 §7).
+
+## At rest and in transit
+
+- **At rest.** With OpenBao configured, the TSIG and state-store secrets are stored as Transit
+  ciphertext (`vault:v1:…`). A row written before that reads as it is, and is sealed the next time
+  it is written.
+- **In transit.** The API serves TLS when `DEEVNET_API_TLS_CERT` and `DEEVNET_API_TLS_KEY` are set,
+  with a certificate issued by the site CA (OpenBao PKI).

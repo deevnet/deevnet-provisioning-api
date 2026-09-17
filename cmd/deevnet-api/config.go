@@ -1,21 +1,26 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/minio"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/opnsense"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/powerdns"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/proxmox"
+	"github.com/deevnet/deevnet-provisioning-api/internal/openbao"
+	"github.com/deevnet/deevnet-provisioning-api/internal/store"
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 )
 
-// tenantEnv is every variable the tenant slice reads. The API serves tenants
-// only when DEEVNET_SITE is set, and then refuses to start unless all the rest
-// are too: half a backend configuration would create half a tenant.
-var tenantEnv = []string{
+// siteEnv is the site's values. The API serves tenants only when DEEVNET_SITE
+// is set, and then refuses to start unless all of these are too: half a
+// configuration would build half a tenant.
+var siteEnv = []string{
 	"DEEVNET_SITE",
 	"DEEVNET_SITE_OCTET",
 	"DEEVNET_ROOT_DOMAIN",
@@ -30,45 +35,113 @@ var tenantEnv = []string{
 	"DEEVNET_STATE_BUCKET",
 	"DEEVNET_RESOLVER_FORWARD_TO",
 	"POWERDNS_API_URL",
-	"POWERDNS_API_KEY",
 	"OPNSENSE_API_URL",
-	"OPNSENSE_API_KEY",
-	"OPNSENSE_API_SECRET",
 	"MINIO_ADMIN_ENDPOINT",
-	"MINIO_ADMIN_ACCESS_KEY",
-	"MINIO_ADMIN_SECRET_KEY",
 	"PROXMOX_API_URL",
-	"PROXMOX_TOKEN_ID",
-	"PROXMOX_TOKEN_SECRET",
+}
+
+// credentials are the backend secrets. With OpenBao (ADR-0016) they are the
+// fields of one KV secret; without it, for tests and local runs, they are
+// environment variables of the same names in upper case.
+var credentials = []string{
+	"powerdns_api_key",
+	"opnsense_api_key",
+	"opnsense_api_secret",
+	"minio_admin_access_key",
+	"minio_admin_secret_key",
+	"proxmox_token_id",
+	"proxmox_token_secret",
+	// Base64, at least 32 bytes: the MAC key of tenant tokens.
+	"token_hmac_key",
+}
+
+// openbaoEnv is what the API needs to reach OpenBao. OPENBAO_ADDR turns
+// OpenBao on; the rest are then required.
+var openbaoEnv = []string{
+	"OPENBAO_ADDR",
+	"OPENBAO_CACERT",
+	"OPENBAO_ROLE_ID",
+	"OPENBAO_SECRET_ID",
 }
 
 // Optional, with defaults that match the site today:
 //
+//	OPENBAO_KV_MOUNT       "deevnet-api"
+//	OPENBAO_KV_PATH        "backends"
+//	OPENBAO_TRANSIT_KEY    "tenant-secrets"
+//	DEEVNET_ENROLLMENT_TTL "72h"
 //	OPNSENSE_INSECURE_TLS  "true": the router's certificate is self-signed
 //	PROXMOX_INSECURE_TLS   "true": so is the node's
-//	MINIO_ADMIN_TLS        "false": the state store is plain HTTP on Platform
+//	MINIO_ADMIN_TLS        "false"
 
-// tenantService builds the tenant service from the environment, or returns nil
-// when DEEVNET_SITE is unset.
-func tenantService(getenv func(string) string) (*tenant.Service, error) {
+// wiring is what main needs beyond the service: the store's sealer.
+type wiring struct {
+	tenants *tenant.Service
+	sealer  store.Sealer
+}
+
+// tenantService builds the tenant service, or returns nothing when
+// DEEVNET_SITE is unset.
+func tenantService(ctx context.Context, getenv func(string) string) (wiring, error) {
 	if getenv("DEEVNET_SITE") == "" {
-		return nil, nil
+		return wiring{}, nil
+	}
+	if missing := empty(getenv, siteEnv); len(missing) > 0 {
+		return wiring{}, fmt.Errorf("DEEVNET_SITE is set, so tenants are served, but these are empty: %s", strings.Join(missing, ", "))
+	}
+
+	var (
+		creds    map[string]string
+		bao      *openbao.Client
+		enroller tenant.Enroller
+		sealer   store.Sealer
+	)
+	if getenv("OPENBAO_ADDR") != "" {
+		if missing := empty(getenv, openbaoEnv); len(missing) > 0 {
+			return wiring{}, fmt.Errorf("OPENBAO_ADDR is set, but these are empty: %s", strings.Join(missing, ", "))
+		}
+		var err error
+		bao, err = openbao.New(openbao.Config{
+			Addr:       getenv("OPENBAO_ADDR"),
+			CAFile:     getenv("OPENBAO_CACERT"),
+			RoleID:     getenv("OPENBAO_ROLE_ID"),
+			SecretID:   getenv("OPENBAO_SECRET_ID"),
+			KVMount:    orDefault(getenv("OPENBAO_KV_MOUNT"), "deevnet-api"),
+			TransitKey: orDefault(getenv("OPENBAO_TRANSIT_KEY"), "tenant-secrets"),
+		})
+		if err != nil {
+			return wiring{}, err
+		}
+		kvPath := orDefault(getenv("OPENBAO_KV_PATH"), "backends")
+		if creds, err = bao.ReadKV(ctx, kvPath); err != nil {
+			return wiring{}, err
+		}
+		enroller, sealer = bao, bao
+	} else {
+		creds = map[string]string{}
+		for _, k := range credentials {
+			creds[k] = getenv(strings.ToUpper(k))
+		}
 	}
 	var missing []string
-	for _, k := range tenantEnv {
-		if getenv(k) == "" {
+	for _, k := range credentials {
+		if creds[k] == "" {
 			missing = append(missing, k)
 		}
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("DEEVNET_SITE is set, so tenants are served, but these are empty: %s", strings.Join(missing, ", "))
+		where := "the environment (upper case)"
+		if bao != nil {
+			where = "the OpenBao KV secret"
+		}
+		return wiring{}, fmt.Errorf("backend credentials missing from %s: %s", where, strings.Join(missing, ", "))
 	}
 
 	ints := map[string]int{}
 	for _, k := range []string{"DEEVNET_SITE_OCTET", "DEEVNET_VRF_VNI_BASE", "DEEVNET_VNET_VNI_BASE"} {
 		n, err := strconv.Atoi(getenv(k))
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", k, err)
+			return wiring{}, fmt.Errorf("%s: %w", k, err)
 		}
 		ints[k] = n
 	}
@@ -96,21 +169,62 @@ func tenantService(getenv func(string) string) (*tenant.Service, error) {
 		ResolverForwardTo: getenv("DEEVNET_RESOLVER_FORWARD_TO"),
 	}
 	if err := site.Validate(); err != nil {
-		return nil, fmt.Errorf("site: %w", err)
+		return wiring{}, fmt.Errorf("site: %w", err)
 	}
 
-	state, err := minio.New(getenv("MINIO_ADMIN_ENDPOINT"), getenv("MINIO_ADMIN_ACCESS_KEY"), getenv("MINIO_ADMIN_SECRET_KEY"), boolEnv(getenv, "MINIO_ADMIN_TLS", false))
+	key, err := base64.StdEncoding.DecodeString(creds["token_hmac_key"])
 	if err != nil {
-		return nil, fmt.Errorf("MINIO_ADMIN_ENDPOINT: %w", err)
+		return wiring{}, fmt.Errorf("token_hmac_key is not base64: %w", err)
+	}
+	tokens, err := tenant.NewTokens(key)
+	if err != nil {
+		return wiring{}, err
 	}
 
-	return &tenant.Service{
-		Site:     site,
-		DNS:      powerdns.New(getenv("POWERDNS_API_URL"), getenv("POWERDNS_API_KEY")),
-		Resolver: opnsense.New(getenv("OPNSENSE_API_URL"), getenv("OPNSENSE_API_KEY"), getenv("OPNSENSE_API_SECRET"), boolEnv(getenv, "OPNSENSE_INSECURE_TLS", true)),
-		State:    state,
-		Fabric:   proxmox.New(getenv("PROXMOX_API_URL"), getenv("PROXMOX_TOKEN_ID"), getenv("PROXMOX_TOKEN_SECRET"), site, boolEnv(getenv, "PROXMOX_INSECURE_TLS", true)),
-	}, nil
+	ttl := 72 * time.Hour
+	if v := getenv("DEEVNET_ENROLLMENT_TTL"); v != "" {
+		if ttl, err = time.ParseDuration(v); err != nil {
+			return wiring{}, fmt.Errorf("DEEVNET_ENROLLMENT_TTL: %w", err)
+		}
+	}
+
+	state, err := minio.New(getenv("MINIO_ADMIN_ENDPOINT"), creds["minio_admin_access_key"], creds["minio_admin_secret_key"], boolEnv(getenv, "MINIO_ADMIN_TLS", false))
+	if err != nil {
+		return wiring{}, fmt.Errorf("MINIO_ADMIN_ENDPOINT: %w", err)
+	}
+
+	svc := &tenant.Service{
+		Site:          site,
+		DNS:           powerdns.New(getenv("POWERDNS_API_URL"), creds["powerdns_api_key"]),
+		Resolver:      opnsense.New(getenv("OPNSENSE_API_URL"), creds["opnsense_api_key"], creds["opnsense_api_secret"], boolEnv(getenv, "OPNSENSE_INSECURE_TLS", true)),
+		State:         state,
+		Fabric:        proxmox.New(getenv("PROXMOX_API_URL"), creds["proxmox_token_id"], creds["proxmox_token_secret"], site, boolEnv(getenv, "PROXMOX_INSECURE_TLS", true)),
+		Tokens:        tokens,
+		EnrollmentTTL: ttl,
+	}
+	// Assigned only when set: a nil *openbao.Client in the interface would not
+	// compare equal to nil.
+	if enroller != nil {
+		svc.Enroller = enroller
+	}
+	return wiring{tenants: svc, sealer: sealer}, nil
+}
+
+func empty(getenv func(string) string, keys []string) []string {
+	var missing []string
+	for _, k := range keys {
+		if getenv(k) == "" {
+			missing = append(missing, k)
+		}
+	}
+	return missing
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func boolEnv(getenv func(string) string, key string, def bool) bool {

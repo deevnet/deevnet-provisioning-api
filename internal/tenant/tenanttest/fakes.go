@@ -251,10 +251,47 @@ func MobileSite() tenant.Site {
 	}
 }
 
-// NewService wires a service to fresh fakes.
+// TokenKey is the token MAC key the fakes use.
+var TokenKey = []byte("0123456789abcdef0123456789abcdef-test-only")
+
+// Enroller is an in-memory single-use token store.
+type Enroller struct {
+	mu     sync.Mutex
+	tokens map[string]map[string]string
+	next   int
+}
+
+func (e *Enroller) Wrap(_ context.Context, data map[string]string, ttl time.Duration) (string, time.Time, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.tokens == nil {
+		e.tokens = map[string]map[string]string{}
+	}
+	e.next++
+	tok := "wrap-" + string(rune('a'+e.next%26)) + time.Now().Format("150405.000000000")
+	e.tokens[tok] = data
+	return tok, time.Now().Add(ttl), nil
+}
+
+func (e *Enroller) Unwrap(_ context.Context, token string) (map[string]string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	data, ok := e.tokens[token]
+	if !ok {
+		return nil, tenant.ErrNotRedeemable
+	}
+	delete(e.tokens, token)
+	return data, nil
+}
+
+// NewService wires a service to fresh fakes, with enrollment on.
 func NewService() (*tenant.Service, *Store, *Backends) {
 	st := NewStore()
 	b := NewBackends()
+	tokens, err := tenant.NewTokens(TokenKey)
+	if err != nil {
+		panic(err)
+	}
 	return &tenant.Service{
 		Site:     MobileSite(),
 		Store:    st,
@@ -262,5 +299,7 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		Resolver: b.Resolver(),
 		State:    b.State(),
 		Fabric:   b.Fabric(),
+		Tokens:   tokens,
+		Enroller: &Enroller{},
 	}, st, b
 }

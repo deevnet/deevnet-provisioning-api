@@ -140,11 +140,26 @@ type Fabric interface {
 	Claims(ctx context.Context) ([]Claim, error)
 }
 
+// Enroller holds single-use enrollment tokens (ADR-0015 §10, ADR-0016 §4).
+// OpenBao's response wrapping implements it.
+type Enroller interface {
+	// Wrap puts data behind a single-use token that lives for ttl.
+	Wrap(ctx context.Context, data map[string]string, ttl time.Duration) (token string, expires time.Time, err error)
+	// Unwrap spends the token and returns its data, or ErrNotRedeemable.
+	Unwrap(ctx context.Context, token string) (map[string]string, error)
+}
+
 var (
 	ErrNotFound    = errors.New("tenant not found")
 	ErrExists      = errors.New("tenant already exists")
 	ErrExhausted   = errors.New("no free tenant index")
 	ErrFabricInUse = errors.New("the fabric still carries this tenant's zone")
+	// ErrNotRedeemable is an enrollment token that was spent, expired, never
+	// existed, or names another tenant. Which one is not said.
+	ErrNotRedeemable = errors.New("enrollment token is not redeemable")
+	// ErrNoEnrollment: the API runs without an Enroller, so only the operator
+	// creates tenants.
+	ErrNoEnrollment = errors.New("enrollment is not configured")
 )
 
 // InvalidError is a request the API refuses to act on.

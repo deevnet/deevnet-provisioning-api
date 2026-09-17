@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 )
 
 // Outcome says what a create call did, so a caller can tell a fresh tenant from
@@ -65,7 +66,12 @@ type Service struct {
 	Resolver Resolver
 	State    StateStore
 	Fabric   Fabric
-	Logger   *slog.Logger
+	// Tokens issues and verifies tenant API tokens. Required.
+	Tokens *Tokens
+	// Enroller backs admission. Nil means only the operator creates tenants.
+	Enroller      Enroller
+	EnrollmentTTL time.Duration
+	Logger        *slog.Logger
 }
 
 const operator = "operator"
@@ -74,6 +80,13 @@ const operator = "operator"
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Result, error) {
 	if err := validateCreate(req); err != nil {
 		return Result{}, err
+	}
+	// A restore brings the token the API issued; one it did not issue, or
+	// issued for another tenant, restores nothing.
+	if req.APIToken != "" {
+		if name, ok := s.Tokens.Verify(req.APIToken); !ok || name != req.Name {
+			return Result{}, invalid("api_token was not issued for tenant %q", req.Name)
+		}
 	}
 
 	rec, err := s.Store.Get(ctx, req.Name)
@@ -123,9 +136,6 @@ func validateCreate(req CreateRequest) error {
 	// MinIO: "Secret key should be in between 8 and 40".
 	if req.StateSecret != "" && (len(req.StateSecret) < 8 || len(req.StateSecret) > 40) {
 		return invalid("state_secret must be 8-40 characters")
-	}
-	if req.APIToken != "" && len(req.APIToken) < 32 {
-		return invalid("api_token must be at least 32 characters")
 	}
 	return nil
 }
@@ -183,7 +193,7 @@ func (s *Service) restoreExisting(ctx context.Context, rec Record, req CreateReq
 		// Resuming without secrets means the caller never received the first
 		// response, so the token it would need was never delivered. Issue a new
 		// one; the old hash is unusable to anyone.
-		tok, err := randomHex(32)
+		tok, err := s.Tokens.Issue(rec.Name)
 		if err != nil {
 			return Result{}, err
 		}
@@ -461,7 +471,7 @@ func (s *Service) secretsFor(req CreateRequest) (Issued, Secrets, error) {
 	if err != nil {
 		return Issued{}, Secrets{}, err
 	}
-	token, err := randomHex(32)
+	token, err := s.Tokens.Issue(req.Name)
 	if err != nil {
 		return Issued{}, Secrets{}, err
 	}
@@ -471,10 +481,103 @@ func (s *Service) secretsFor(req CreateRequest) (Issued, Secrets, error) {
 		nil
 }
 
+// Admission is an admitted tenant name and the single-use token that creates it.
+type Admission struct {
+	Name            string
+	EnrollmentToken string
+	ExpiresAt       time.Time
+}
+
+// Admit lets a tenant create itself: it wraps the name behind a single-use
+// enrollment token (ADR-0015 §10). A registered name is refused.
+func (s *Service) Admit(ctx context.Context, name string) (Admission, error) {
+	if s.Enroller == nil {
+		return Admission{}, ErrNoEnrollment
+	}
+	if !ValidName(name) {
+		return Admission{}, invalid("name must be 1-8 lowercase alphanumerics starting with a letter")
+	}
+	if _, err := s.Store.Get(ctx, name); err == nil {
+		return Admission{}, ErrExists
+	} else if !errors.Is(err, ErrNotFound) {
+		return Admission{}, err
+	}
+	ttl := s.EnrollmentTTL
+	if ttl <= 0 {
+		ttl = 72 * time.Hour
+	}
+	tok, expires, err := s.Enroller.Wrap(ctx, map[string]string{"tenant": name}, ttl)
+	if err != nil {
+		return Admission{}, &StepError{Step: "enrollment", Err: err}
+	}
+	s.audit(ctx, "admit", name, map[string]any{"expires_at": expires.UTC().Format(time.RFC3339)})
+	return Admission{Name: name, EnrollmentToken: tok, ExpiresAt: expires}, nil
+}
+
+// Redeem spends an enrollment token for the tenant it was issued for. It is
+// spent even when it names another tenant, so a guessed pairing costs the
+// holder the token.
+func (s *Service) Redeem(ctx context.Context, token, name string) error {
+	if s.Enroller == nil {
+		return ErrNoEnrollment
+	}
+	data, err := s.Enroller.Unwrap(ctx, token)
+	if errors.Is(err, ErrNotRedeemable) {
+		return ErrNotRedeemable
+	}
+	if err != nil {
+		return &StepError{Step: "enrollment", Err: err}
+	}
+	if data["tenant"] != name {
+		s.audit(ctx, "enrollment-mismatch", name, map[string]any{"token_for": data["tenant"]})
+		return ErrNotRedeemable
+	}
+	s.audit(ctx, "enroll", name, nil)
+	return nil
+}
+
+// Caller is who a tenant token speaks for.
+type Caller struct {
+	Tenant string
+	// Registered is false when the token verifies but its tenant is not in the
+	// registry: a tenant restoring itself after the registry was lost. Such a
+	// caller may only create its own name.
+	Registered bool
+}
+
+// Authenticate returns the tenant a bearer token speaks for. A registered
+// tenant is accepted only with the token whose hash the registry holds, so a
+// replaced token is revoked.
+func (s *Service) Authenticate(ctx context.Context, token string) (Caller, bool) {
+	if s.Tokens == nil {
+		return Caller{}, false
+	}
+	name, ok := s.Tokens.Verify(token)
+	if !ok {
+		return Caller{}, false
+	}
+	rec, err := s.Store.Get(ctx, name)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return Caller{Tenant: name}, true
+	case err != nil:
+		s.logger().Error("authenticating tenant token", "tenant", name, "err", err)
+		return Caller{}, false
+	}
+	if subtleEqual(rec.Secrets.APITokenHash, HashToken(token)) {
+		return Caller{Tenant: name, Registered: true}, true
+	}
+	return Caller{}, false
+}
+
 // HashToken is how a tenant API token is stored.
 func HashToken(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
+}
+
+func subtleEqual(a, b []byte) bool {
+	return len(a) == len(b) && hmacEqual(a, b)
 }
 
 func randomHex(n int) (string, error) {

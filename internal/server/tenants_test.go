@@ -29,12 +29,19 @@ func tenantServer(t *testing.T) (http.Handler, *tenanttest.Store, *tenanttest.Ba
 
 func call(t *testing.T, h http.Handler, method, path, body string) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
+	return callAs(t, h, "s3cret", method, path, body)
+}
+
+func callAs(t *testing.T, h http.Handler, token, method, path, body string) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
 	var rdr io.Reader
 	if body != "" {
 		rdr = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, path, rdr)
-	req.Header.Set("Authorization", "Bearer s3cret")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	out := map[string]any{}
@@ -132,7 +139,9 @@ func TestGetAndListNeverCarrySecrets(t *testing.T) {
 func TestRestoreThroughTheAPI(t *testing.T) {
 	h, st, _ := tenantServer(t)
 	st.Put(tenant.Record{Name: "grooveiq", Index: 4, Status: tenant.StatusReady})
-	body := `{"name":"tdemo","index":4,"tsig_secret":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=","state_secret":"state-secret-from-state","api_token":"` + strings.Repeat("a", 64) + `"}`
+	tokens, _ := tenant.NewTokens(tenanttest.TokenKey)
+	tok, _ := tokens.Issue("tdemo")
+	body := `{"name":"tdemo","index":4,"tsig_secret":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=","state_secret":"state-secret-from-state","api_token":"` + tok + `"}`
 	rec, out := call(t, h, http.MethodPost, "/v1/tenants", body)
 	if rec.Code != http.StatusCreated || out["outcome"] != "reissued" || out["index"] == float64(4) {
 		t.Fatalf("got %d %v, want 201 reissued on a new index", rec.Code, out)
@@ -210,5 +219,96 @@ func TestUnconfiguredTenantsStillAnswer501(t *testing.T) {
 	rec, body := do(t, h, http.MethodGet, "/v1/tenants", "s3cret")
 	if rec.Code != http.StatusNotImplemented || body["error"] != "not implemented" {
 		t.Fatalf("got %d %v, want 501 without a tenant service", rec.Code, body)
+	}
+}
+
+func TestEnrollmentCreatesTheAdmittedTenantOnce(t *testing.T) {
+	h, _, _ := tenantServer(t)
+
+	rec, adm := call(t, h, http.MethodPost, "/v1/admissions", `{"name":"tdemo"}`)
+	if rec.Code != http.StatusCreated || adm["enrollment_token"] == "" {
+		t.Fatalf("admit: %d %v", rec.Code, adm)
+	}
+	enroll := adm["enrollment_token"].(string)
+
+	// The enrollment token is good for creating its own name, nothing else.
+	if rec, _ := callAs(t, h, enroll, http.MethodGet, "/v1/tenants", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("list with an enrollment token: %d, want 401", rec.Code)
+	}
+	rec, created := callAs(t, h, enroll, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create with the enrollment token: %d %v", rec.Code, created)
+	}
+	if rec, _ := callAs(t, h, enroll, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`); rec.Code != http.StatusUnauthorized {
+		t.Errorf("reusing the enrollment token: %d, want 401", rec.Code)
+	}
+
+	// The tenant token it received reads its own tenant, and nothing else.
+	tok := created["api_token"].(string)
+	if rec, _ := callAs(t, h, tok, http.MethodGet, "/v1/tenants/tdemo", ""); rec.Code != http.StatusOK {
+		t.Errorf("tenant reads itself: %d", rec.Code)
+	}
+	call(t, h, http.MethodPost, "/v1/tenants", `{"name":"eds"}`)
+	if rec, _ := callAs(t, h, tok, http.MethodGet, "/v1/tenants/eds", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("tenant reads another tenant: %d, want 404", rec.Code)
+	}
+	for _, r := range []struct{ method, path, body string }{
+		{http.MethodGet, "/v1/tenants", ""},
+		{http.MethodPost, "/v1/admissions", `{"name":"x"}`},
+		{http.MethodGet, "/v1/fabric/egress", ""},
+		{http.MethodPost, "/v1/tenants/tdemo/reconcile", ""},
+	} {
+		if rec, _ := callAs(t, h, tok, r.method, r.path, r.body); rec.Code != http.StatusForbidden {
+			t.Errorf("tenant %s %s: %d, want 403", r.method, r.path, rec.Code)
+		}
+	}
+	if rec, _ := callAs(t, h, tok, http.MethodPost, "/v1/tenants", `{"name":"eds"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("tenant creating another name: %d, want 403", rec.Code)
+	}
+}
+
+func TestEnrollmentTokenForAnotherNameIsRefusedAndSpent(t *testing.T) {
+	h, _, _ := tenantServer(t)
+	_, adm := call(t, h, http.MethodPost, "/v1/admissions", `{"name":"tdemo"}`)
+	enroll := adm["enrollment_token"].(string)
+	if rec, _ := callAs(t, h, enroll, http.MethodPost, "/v1/tenants", `{"name":"eds"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("create another name: %d, want 401", rec.Code)
+	}
+	if rec, _ := callAs(t, h, enroll, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("after a mismatch the token is spent: %d, want 401", rec.Code)
+	}
+}
+
+func TestTenantRestoresItselfAfterTheRegistryIsLost(t *testing.T) {
+	h, _, _ := tenantServer(t)
+	_, first := call(t, h, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`)
+	tok := first["api_token"].(string)
+	restore := `{"name":"tdemo","index":1,"tsig_secret":"` + dig(first, "dns", "tsig_secret").(string) +
+		`","state_secret":"` + dig(first, "state", "secret_key").(string) + `","api_token":"` + tok + `"}`
+
+	// A fresh API: same token key, empty registry.
+	h2, _, _ := tenantServer(t)
+	rec, out := callAs(t, h2, tok, http.MethodPost, "/v1/tenants", restore)
+	if rec.Code != http.StatusCreated || out["outcome"] != "restored" {
+		t.Fatalf("restore with its own token: %d %v", rec.Code, out)
+	}
+	if rec, _ := callAs(t, h2, tok, http.MethodGet, "/v1/tenants/tdemo", ""); rec.Code != http.StatusOK {
+		t.Errorf("the restored token reads its tenant: %d", rec.Code)
+	}
+	if rec, _ := callAs(t, h2, "dvt1.tdemo.forged.mac", http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a forged tenant token: %d, want 401", rec.Code)
+	}
+}
+
+func TestAdmissionsWithoutEnrollment(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	svc.Enroller = nil
+	svc.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := New(Config{Token: "s3cret", DB: fakeDB{}, Logger: svc.Logger, Tenants: svc})
+	if rec, _ := call(t, h, http.MethodPost, "/v1/admissions", `{"name":"tdemo"}`); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("admit without enrollment: %d, want 501", rec.Code)
+	}
+	if rec, _ := callAs(t, h, "anything", http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown token without enrollment: %d, want 401", rec.Code)
 	}
 }

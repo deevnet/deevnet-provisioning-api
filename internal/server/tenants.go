@@ -7,18 +7,64 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/deevnet/deevnet-provisioning-api/internal/auth"
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 )
 
 // The tenant routes (ADR-0015). Every one sits behind the operator token.
 func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) {
 	h := &tenantHandlers{svc: svc, logger: logger}
+	mux.HandleFunc("POST /v1/admissions", operatorOnly(h.admit))
 	mux.HandleFunc("POST /v1/tenants", h.create)
-	mux.HandleFunc("GET /v1/tenants", h.list)
-	mux.HandleFunc("GET /v1/tenants/{name}", h.get)
-	mux.HandleFunc("DELETE /v1/tenants/{name}", h.delete)
-	mux.HandleFunc("POST /v1/tenants/{name}/reconcile", h.reconcile)
-	mux.HandleFunc("GET /v1/fabric/egress", h.egress)
+	mux.HandleFunc("GET /v1/tenants", operatorOnly(h.list))
+	mux.HandleFunc("GET /v1/tenants/{name}", h.ownTenant(h.get))
+	mux.HandleFunc("DELETE /v1/tenants/{name}", h.ownTenant(h.delete))
+	mux.HandleFunc("POST /v1/tenants/{name}/reconcile", operatorOnly(h.reconcile))
+	mux.HandleFunc("GET /v1/fabric/egress", operatorOnly(h.egress))
+}
+
+// ownTenant admits the operator, and a registered tenant for its own name. A
+// tenant asking for another name is told it does not exist.
+func (h *tenantHandlers) ownTenant(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := principalFrom(r.Context())
+		switch {
+		case p.operator:
+			next(w, r)
+		case p.tenant != "" && p.registered:
+			if p.tenant != r.PathValue("name") {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+				return
+			}
+			next(w, r)
+		default:
+			auth.Deny(w)
+		}
+	}
+}
+
+type admitBody struct {
+	Name string `json:"name"`
+}
+
+func (h *tenantHandlers) admit(w http.ResponseWriter, r *http.Request) {
+	var body admitBody
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be {\"name\": ...}"})
+		return
+	}
+	adm, err := h.svc.Admit(r.Context(), body.Name)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"name":             adm.Name,
+		"enrollment_token": adm.EnrollmentToken,
+		"expires_at":       adm.ExpiresAt.UTC(),
+	})
 }
 
 type tenantHandlers struct {
@@ -135,6 +181,29 @@ func (h *tenantHandlers) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Who may create this name: the operator; the tenant itself, restoring or
+	// resuming; or the holder of an enrollment token issued for it, which is
+	// spent here.
+	p := principalFrom(r.Context())
+	switch {
+	case p.operator:
+	case p.tenant != "":
+		if p.tenant != body.Name {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "a tenant token only creates its own tenant"})
+			return
+		}
+	default:
+		if err := h.svc.Redeem(r.Context(), p.presented, body.Name); err != nil {
+			var step *tenant.StepError
+			if errors.As(err, &step) {
+				h.fail(w, err)
+				return
+			}
+			auth.Deny(w)
+			return
+		}
+	}
+
 	res, err := h.svc.Create(r.Context(), tenant.CreateRequest(body))
 	if err != nil {
 		var step *tenant.StepError
@@ -225,6 +294,8 @@ func (h *tenantHandlers) fail(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "tenant already exists"})
 	case errors.Is(err, tenant.ErrExhausted):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "no free tenant index"})
+	case errors.Is(err, tenant.ErrNoEnrollment):
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "enrollment is not configured on this API"})
 	case errors.Is(err, tenant.ErrFabricInUse):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "the fabric still carries this tenant's zone; destroy the tenant's resources first"})
 	case errors.As(err, &inv):

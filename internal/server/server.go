@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/deevnet/deevnet-provisioning-api/internal/auth"
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 	"github.com/deevnet/deevnet-provisioning-api/internal/version"
 )
@@ -49,12 +48,15 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /readyz", readyz(cfg.DB, cfg.Migrated, cfg.Logger))
 	mux.HandleFunc("GET /version", versionInfo)
 
+	if cfg.Token == "" {
+		panic("server: empty operator token")
+	}
 	v1 := http.NewServeMux()
 	if cfg.Tenants != nil {
 		tenantRoutes(v1, cfg.Tenants, cfg.Logger)
 	}
-	v1.HandleFunc("/v1/", notImplemented)
-	mux.Handle("/v1/", auth.Bearer(cfg.Token, requireMigrated(cfg.Migrated, v1)))
+	v1.HandleFunc("/v1/", knownCaller(notImplemented))
+	mux.Handle("/v1/", requireToken(requireMigrated(cfg.Migrated, identify(cfg.Token, cfg.Tenants, v1))))
 
 	return logRequests(cfg.Logger, mux)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -33,22 +34,27 @@ func fullEnv() map[string]string {
 		"MINIO_ADMIN_ACCESS_KEY":      "deevnet-api",
 		"MINIO_ADMIN_SECRET_KEY":      "s",
 		"PROXMOX_API_URL":             "https://10.20.99.22:8006",
-		"PROXMOX_TOKEN_ID":            "deevnet-api@pve!sdn-audit",
+		"PROXMOX_TOKEN_ID":            "deevnet-api@pve!tenants",
 		"PROXMOX_TOKEN_SECRET":        "s",
+		"TOKEN_HMAC_KEY":              "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
 	}
 }
 
 func TestNoSiteMeansNoTenants(t *testing.T) {
-	svc, err := tenantService(env(map[string]string{}))
-	if svc != nil || err != nil {
-		t.Fatalf("got %v %v, want nil nil", svc, err)
+	w, err := tenantService(context.Background(), env(map[string]string{}))
+	if w.tenants != nil || err != nil {
+		t.Fatalf("got %v %v, want nothing", w.tenants, err)
 	}
 }
 
 func TestFullEnvBuildsTheService(t *testing.T) {
-	svc, err := tenantService(env(fullEnv()))
+	w, err := tenantService(context.Background(), env(fullEnv()))
 	if err != nil {
 		t.Fatal(err)
+	}
+	svc := w.tenants
+	if svc.Enroller != nil || w.sealer != nil {
+		t.Error("without OpenBao there is no enrollment and no sealing")
 	}
 	if got := strings.Join(svc.Site.DNSUpdateFrom, "|"); got != "10.20.99.0/24|10.20.10.0/24|10.20.50.0/24" {
 		t.Errorf("update-from = %s", got)
@@ -62,11 +68,28 @@ func TestHalfConfiguredIsRefusedAndNamesWhatIsMissing(t *testing.T) {
 	e := fullEnv()
 	delete(e, "OPNSENSE_API_SECRET")
 	delete(e, "PROXMOX_TOKEN_ID")
-	_, err := tenantService(env(e))
-	if err == nil || !strings.Contains(err.Error(), "OPNSENSE_API_SECRET") || !strings.Contains(err.Error(), "PROXMOX_TOKEN_ID") {
+	_, err := tenantService(context.Background(), env(e))
+	if err == nil || !strings.Contains(err.Error(), "opnsense_api_secret") || !strings.Contains(err.Error(), "proxmox_token_id") {
 		t.Fatalf("err = %v, want both missing names", err)
 	}
 	if strings.Contains(err.Error(), "=s") {
 		t.Error("the error must name variables, not print values")
+	}
+}
+
+func TestSiteValuesMissing(t *testing.T) {
+	e := fullEnv()
+	delete(e, "DEEVNET_FABRIC_NODE")
+	if _, err := tenantService(context.Background(), env(e)); err == nil || !strings.Contains(err.Error(), "DEEVNET_FABRIC_NODE") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenBaoHalfConfigured(t *testing.T) {
+	e := fullEnv()
+	e["OPENBAO_ADDR"] = "https://10.20.25.21:8200"
+	_, err := tenantService(context.Background(), env(e))
+	if err == nil || !strings.Contains(err.Error(), "OPENBAO_ROLE_ID") {
+		t.Fatalf("err = %v, want the missing OpenBao settings named", err)
 	}
 }

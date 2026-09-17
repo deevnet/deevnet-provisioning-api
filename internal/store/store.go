@@ -28,12 +28,51 @@ const (
 	allocationLock = 0x6465766e_0002
 )
 
+// Sealer encrypts the tenant secrets the registry keeps (ADR-0016 §3). Open
+// must read a value stored before encryption was on as it is.
+type Sealer interface {
+	Seal(ctx context.Context, plaintext string) (string, error)
+	Open(ctx context.Context, stored string) (string, error)
+}
+
 // Postgres is a tenant.Store.
 type Postgres struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	sealer Sealer
 }
 
 func New(pool *pgxpool.Pool) *Postgres { return &Postgres{pool: pool} }
+
+// WithSealer stores TSIG and state secrets encrypted. Without one they are
+// stored as they are, which is only for tests and local runs.
+func (p *Postgres) WithSealer(s Sealer) *Postgres {
+	p.sealer = s
+	return p
+}
+
+func (p *Postgres) seal(ctx context.Context, s tenant.Secrets) (tenant.Secrets, error) {
+	if p.sealer == nil {
+		return s, nil
+	}
+	var err error
+	if s.TSIG, err = p.sealer.Seal(ctx, s.TSIG); err != nil {
+		return s, err
+	}
+	s.State, err = p.sealer.Seal(ctx, s.State)
+	return s, err
+}
+
+func (p *Postgres) open(ctx context.Context, s tenant.Secrets) (tenant.Secrets, error) {
+	if p.sealer == nil {
+		return s, nil
+	}
+	var err error
+	if s.TSIG, err = p.sealer.Open(ctx, s.TSIG); err != nil {
+		return s, err
+	}
+	s.State, err = p.sealer.Open(ctx, s.State)
+	return s, err
+}
 
 // Migrate applies every embedded migration not yet recorded, in order, each in
 // its own transaction, under a lock so two instances starting together do not
@@ -112,6 +151,9 @@ func (p *Postgres) Get(ctx context.Context, name string) (tenant.Record, error) 
 	if err != nil {
 		return tenant.Record{}, err
 	}
+	if r.Secrets, err = p.open(ctx, r.Secrets); err != nil {
+		return tenant.Record{}, fmt.Errorf("opening secrets of %s: %w", name, err)
+	}
 	rows, err := p.pool.Query(ctx, `SELECT step, ok, COALESCE(error, ''), updated_at FROM tenant_steps WHERE tenant = $1 ORDER BY updated_at, step`, name)
 	if err != nil {
 		return tenant.Record{}, err
@@ -129,12 +171,22 @@ func (p *Postgres) List(ctx context.Context) ([]tenant.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (tenant.Record, error) { return scanTenant(row) })
+	// A listing never carries secrets, sealed or not: nothing that lists needs
+	// them, and Get opens them for the one tenant that does.
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (tenant.Record, error) {
+		r, err := scanTenant(row)
+		r.Secrets = tenant.Secrets{}
+		return r, err
+	})
 }
 
 func (p *Postgres) Create(ctx context.Context, name string, secrets tenant.Secrets, pick func(map[int]string) (int, error)) (tenant.Record, error) {
+	sealed, err := p.seal(ctx, secrets)
+	if err != nil {
+		return tenant.Record{}, fmt.Errorf("sealing secrets of %s: %w", name, err)
+	}
 	var rec tenant.Record
-	err := pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		// Held until the transaction ends: allocation is serialised across every
 		// API instance, and the UNIQUE constraint is the backstop.
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, allocationLock); err != nil {
@@ -168,7 +220,8 @@ func (p *Postgres) Create(ctx context.Context, name string, secrets tenant.Secre
 			`INSERT INTO tenants (name, idx, status, tsig_secret, state_secret, api_token_hash)
 			 VALUES ($1, $2, $3, $4, $5, $6)
 			 RETURNING `+tenantColumns,
-			name, n, string(tenant.StatusProvisioning), secrets.TSIG, secrets.State, secrets.APITokenHash))
+			name, n, string(tenant.StatusProvisioning), sealed.TSIG, sealed.State, sealed.APITokenHash))
+		rec.Secrets = secrets
 		return err
 	})
 	var pgErr *pgconn.PgError
@@ -183,6 +236,10 @@ func (p *Postgres) SetStatus(ctx context.Context, name string, status tenant.Sta
 }
 
 func (p *Postgres) SetSecrets(ctx context.Context, name string, s tenant.Secrets) error {
+	s, err := p.seal(ctx, s)
+	if err != nil {
+		return fmt.Errorf("sealing secrets of %s: %w", name, err)
+	}
 	return p.execOne(ctx,
 		`UPDATE tenants SET tsig_secret = $2, state_secret = $3, api_token_hash = $4, updated_at = now() WHERE name = $1`,
 		name, s.TSIG, s.State, s.APITokenHash)

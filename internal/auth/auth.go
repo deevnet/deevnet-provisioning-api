@@ -1,8 +1,5 @@
-// Package auth is the API's token check.
-//
-// It is a stub: one shared bearer token, delivered to the container from the
-// vault. ADR-0012 gives each tenant its own credential confined to its scope;
-// that replaces this package, and the middleware seam stays where it is.
+// Package auth reads bearer tokens. Who a token speaks for - the operator, a
+// tenant, or an enrollment - is decided by the server (ADR-0015 §10).
 package auth
 
 import (
@@ -11,27 +8,29 @@ import (
 	"strings"
 )
 
-// Bearer admits a request only when its Authorization header carries token.
-//
-// It panics on an empty token rather than returning a middleware that would
-// compare an empty header equal to it and admit everyone.
-func Bearer(token string, next http.Handler) http.Handler {
-	if token == "" {
-		panic("auth: empty bearer token")
+// Token returns the bearer token a request carries.
+func Token(r *http.Request) (string, bool) {
+	got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || got == "" {
+		return "", false
 	}
-	want := []byte(token)
+	return got, true
+}
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		// Constant time, so response timing does not reveal how much of a
-		// guessed token was right.
-		if !ok || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="deevnet-api"`)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"unauthorized"}` + "\n"))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// Equal compares a presented token with a known one in constant time, so
+// response timing does not reveal how much of a guess was right. An empty
+// known token matches nothing.
+func Equal(presented, known string) bool {
+	if known == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(known)) == 1
+}
+
+// Deny answers 401.
+func Deny(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="deevnet-api"`)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"unauthorized"}` + "\n"))
 }

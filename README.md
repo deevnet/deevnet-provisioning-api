@@ -25,12 +25,14 @@ The IoT resources of ADR-0012 arrive later; their routes still answer `501`. The
 | `GET /healthz` | none | `200 {"status":"ok"}`. Liveness only; never touches the database. |
 | `GET /readyz` | none | `200` when the database answers and is migrated, `503` otherwise. The reason is logged, not returned. |
 | `GET /version` | none | `{"version","commit","built"}`, stamped at build time |
-| `POST /v1/tenants` | operator token | create, restore or resume a tenant |
-| `GET /v1/tenants`, `GET /v1/tenants/{name}` | operator token | the registry, without secrets |
-| `POST /v1/tenants/{name}/reconcile` | operator token | re-ensure every backend |
-| `DELETE /v1/tenants/{name}` | operator token | remove a tenant whose fabric resources are gone |
-| `GET /v1/fabric/egress` | operator token | the VRFs the exit node routes |
-| any other `/v1/*` | operator token | `401` without a valid token; `501` with one |
+| `POST /v1/admissions` | operator | admit a tenant name; returns a single-use enrollment token |
+| `POST /v1/tenants` | operator, enrollment token, or the tenant itself | create, restore or resume a tenant |
+| `GET /v1/tenants` | operator | the registry, without secrets |
+| `GET /v1/tenants/{name}` | operator or the tenant | one tenant, without secrets |
+| `POST /v1/tenants/{name}/reconcile` | operator | re-ensure every backend |
+| `DELETE /v1/tenants/{name}` | operator or the tenant | remove a tenant whose fabric resources are gone |
+| `GET /v1/fabric/egress` | operator | the VRFs the exit node routes |
+| any other `/v1/*` | operator or a tenant | `401` without a valid token; `501` with one |
 
 ## Configuration
 
@@ -57,12 +59,31 @@ API refuses to start if any is empty.
 | `DEEVNET_DNS_UPDATE_FROM` | `10.20.99.0/24,10.20.10.0/24,10.20.50.0/24` | networks that may attempt an update |
 | `DEEVNET_STATE_ENDPOINT`, `DEEVNET_STATE_BUCKET` | `http://tfstate.mobile.deevnet.net:9000`, `tf-state` | the offered state store |
 | `DEEVNET_RESOLVER_FORWARD_TO` | `10.20.25.21` | the address the router forwards tenant zones to |
-| `POWERDNS_API_URL`, `POWERDNS_API_KEY` | `http://10.20.25.21:8081` | PowerDNS HTTP API |
-| `OPNSENSE_API_URL`, `OPNSENSE_API_KEY`, `OPNSENSE_API_SECRET` | `https://10.20.25.1/api` | the core router |
-| `MINIO_ADMIN_ENDPOINT`, `MINIO_ADMIN_ACCESS_KEY`, `MINIO_ADMIN_SECRET_KEY` | `10.20.25.20:9000` | the API's own state-store admin user, never root |
-| `PROXMOX_API_URL`, `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET` | `https://10.20.99.22:8006` | a token that can read SDN |
-| `OPNSENSE_INSECURE_TLS`, `PROXMOX_INSECURE_TLS` | optional, default `true` | self-signed certificates until the internal CA |
-| `MINIO_ADMIN_TLS` | optional, default `false` | |
+| `POWERDNS_API_URL` | `http://10.20.25.21:8081` | PowerDNS HTTP API |
+| `OPNSENSE_API_URL` | `https://10.20.25.1/api` | the core router |
+| `MINIO_ADMIN_ENDPOINT` | `10.20.25.20:9000` | the state store's admin API |
+| `PROXMOX_API_URL` | `https://10.20.99.22:8006` | the tenant hypervisor |
+
+**Backend credentials come from OpenBao** (ADR-0016) when `OPENBAO_ADDR` is set: the fields of one
+KV v2 secret.
+- **Fields:** `powerdns_api_key`, `opnsense_api_key`, `opnsense_api_secret`,
+  `minio_admin_access_key`, `minio_admin_secret_key`, `proxmox_token_id`, `proxmox_token_secret`,
+  and `token_hmac_key` (base64, at least 32 bytes, the MAC key of tenant tokens).
+- **OpenBao also provides** envelope encryption of stored secrets and enrollment tokens.
+- **Without OpenBao** (tests and local runs), the same names are read from the environment in upper
+  case. There is then no enrollment and no encryption at rest.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENBAO_ADDR` | | e.g. `https://10.20.25.21:8200`; turns OpenBao on |
+| `OPENBAO_CACERT` | | the pinned listener certificate |
+| `OPENBAO_ROLE_ID`, `OPENBAO_SECRET_ID` | | the API's AppRole |
+| `OPENBAO_KV_MOUNT`, `OPENBAO_KV_PATH` | `deevnet-api`, `backends` | where the credentials are |
+| `OPENBAO_TRANSIT_KEY` | `tenant-secrets` | the key that seals stored secrets |
+| `DEEVNET_ENROLLMENT_TTL` | `72h` | how long an enrollment token lives |
+| `DEEVNET_API_TLS_CERT`, `DEEVNET_API_TLS_KEY` | | serve TLS; set both or neither |
+| `OPNSENSE_INSECURE_TLS`, `PROXMOX_INSECURE_TLS` | `true` | self-signed certificates on those devices |
+| `MINIO_ADMIN_TLS` | `false` | |
 
 ## Build and stage
 
@@ -90,7 +111,8 @@ defaults, or in inventory, when a new version is staged.
 ```
 cmd/deevnet-api/        main and configuration: pool, migrations, backends, graceful shutdown
 internal/server/        routes and handlers
-internal/auth/          operator bearer-token middleware
+internal/auth/          bearer token parsing
+internal/openbao/       KV, Transit and response wrapping over OpenBao's HTTP API
 internal/tenant/        ADR-0015's rules: allocation, restore, the backend step order
 internal/tenant/tenanttest/  in-memory registry and backends for tests
 internal/store/         the registry in PostgreSQL, with embedded migrations

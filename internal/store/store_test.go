@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -184,5 +185,60 @@ func TestServiceOverPostgres(t *testing.T) {
 	}
 	if len(second.Record.Steps) != 3 {
 		t.Fatalf("steps = %+v", second.Record.Steps)
+	}
+}
+
+// fakeSealer marks values instead of encrypting them, so the test can see
+// what reached the database.
+type fakeSealer struct{}
+
+func (fakeSealer) Seal(_ context.Context, v string) (string, error) { return "vault:v1:" + v, nil }
+func (fakeSealer) Open(_ context.Context, v string) (string, error) {
+	return strings.TrimPrefix(v, "vault:v1:"), nil
+}
+
+func TestSecretsAreSealedAtRest(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+
+	// A row written before encryption was turned on.
+	if _, err := p.Create(ctx, "legacy", tenant.Secrets{TSIG: "old-tsig", State: "old-state", APITokenHash: []byte{1}}, lowest); err != nil {
+		t.Fatal(err)
+	}
+	p.WithSealer(fakeSealer{})
+
+	rec, err := p.Create(ctx, "tdemo", tenant.Secrets{TSIG: "tsig", State: "state", APITokenHash: []byte{2}}, lowest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Secrets.TSIG != "tsig" {
+		t.Errorf("create returned %q, want the plaintext", rec.Secrets.TSIG)
+	}
+	var tsig, state string
+	if err := p.pool.QueryRow(ctx, `SELECT tsig_secret, state_secret FROM tenants WHERE name = 'tdemo'`).Scan(&tsig, &state); err != nil {
+		t.Fatal(err)
+	}
+	if tsig != "vault:v1:tsig" || state != "vault:v1:state" {
+		t.Fatalf("stored %q %q, want sealed values", tsig, state)
+	}
+	got, err := p.Get(ctx, "tdemo")
+	if err != nil || got.Secrets.TSIG != "tsig" || got.Secrets.State != "state" {
+		t.Fatalf("get = %+v %v", got.Secrets, err)
+	}
+	legacy, err := p.Get(ctx, "legacy")
+	if err != nil || legacy.Secrets.TSIG != "old-tsig" {
+		t.Fatalf("a row stored before encryption reads as it is: %+v %v", legacy.Secrets, err)
+	}
+	if err := p.SetSecrets(ctx, "legacy", legacy.Secrets); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.pool.QueryRow(ctx, `SELECT tsig_secret FROM tenants WHERE name = 'legacy'`).Scan(&tsig); err != nil || tsig != "vault:v1:old-tsig" {
+		t.Fatalf("rewritten legacy row = %q %v, want sealed", tsig, err)
+	}
+	recs, _ := p.List(ctx)
+	for _, r := range recs {
+		if r.Secrets.TSIG != "" || r.Secrets.State != "" {
+			t.Errorf("list carried secrets for %s", r.Name)
+		}
 	}
 }

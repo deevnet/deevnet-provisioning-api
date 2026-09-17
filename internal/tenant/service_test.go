@@ -46,8 +46,11 @@ func TestCreateAllocatesLowestFreeIndexAndEnsuresEveryBackend(t *testing.T) {
 	if raw, err := base64.StdEncoding.DecodeString(res.Issued.TSIGSecret); err != nil || len(raw) != 32 {
 		t.Errorf("TSIG secret is not base64 of 32 bytes")
 	}
-	if len(res.Issued.StateSecret) != 40 || len(res.Issued.APIToken) != 64 {
-		t.Errorf("state secret %d chars, token %d chars; want 40 and 64", len(res.Issued.StateSecret), len(res.Issued.APIToken))
+	if len(res.Issued.StateSecret) != 40 {
+		t.Errorf("state secret %d chars, want 40", len(res.Issued.StateSecret))
+	}
+	if name, ok := svc.Tokens.Verify(res.Issued.APIToken); !ok || name != "tdemo" {
+		t.Errorf("issued token does not verify for tdemo")
 	}
 	rec, _ := st.Get(ctx, "tdemo")
 	if string(rec.Secrets.APITokenHash) != string(tenant.HashToken(res.Issued.APIToken)) {
@@ -85,13 +88,19 @@ func TestCreateWithoutStateReusesTheIndexItsOwnZoneHolds(t *testing.T) {
 	}
 }
 
+var testTokens, _ = tenant.NewTokens(tenanttest.TokenKey)
+
 func restore(name string, index int) tenant.CreateRequest {
+	tok, err := testTokens.Issue(name)
+	if err != nil {
+		panic(err)
+	}
 	return tenant.CreateRequest{
 		Name:        name,
 		Index:       index,
 		TSIGSecret:  base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
 		StateSecret: "state-secret-from-tenant-state",
-		APIToken:    strings.Repeat("t", 64),
+		APIToken:    tok,
 	}
 }
 
@@ -301,5 +310,105 @@ func TestNumbering(t *testing.T) {
 	}
 	if site.IndexForVNetTag(20010) != 1 || site.IndexForVNetTag(20019) != 1 || site.IndexForVNetTag(20020) != 2 || site.IndexForVNetTag(20005) != 0 {
 		t.Error("IndexForVNetTag")
+	}
+}
+
+func TestTokens(t *testing.T) {
+	tok, err := testTokens.Issue("tdemo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name, ok := testTokens.Verify(tok); !ok || name != "tdemo" {
+		t.Fatalf("verify = %q %v", name, ok)
+	}
+	other, _ := tenant.NewTokens([]byte("another-key-another-key-another-key!!"))
+	parts := strings.Split(tok, ".")
+	for label, bad := range map[string]string{
+		"other key":      func() string { x, _ := other.Issue("tdemo"); return x }(),
+		"renamed":        strings.Join([]string{parts[0], "eds", parts[2], parts[3]}, "."),
+		"nonce changed":  strings.Join([]string{parts[0], parts[1], parts[2] + "x", parts[3]}, "."),
+		"not a token":    "s3cret",
+		"bad name":       "dvt1.TOOLONGNAME.abc.def",
+		"missing a part": strings.Join(parts[:3], "."),
+	} {
+		if _, ok := testTokens.Verify(bad); ok {
+			t.Errorf("%s: verified", label)
+		}
+	}
+	if _, err := tenant.NewTokens([]byte("short")); err == nil {
+		t.Error("a short key was accepted")
+	}
+}
+
+func TestRestoreRefusesATokenIssuedForAnotherTenant(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	req := restore("tdemo", 3)
+	req.APIToken = restore("eds", 3).APIToken
+	var inv *tenant.InvalidError
+	if _, err := svc.Create(ctx, req); !errors.As(err, &inv) {
+		t.Fatalf("err = %v, want InvalidError", err)
+	}
+}
+
+func TestAdmissionIsSingleUseAndNamed(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	adm, err := svc.Admit(ctx, "tdemo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Redeem(ctx, adm.EnrollmentToken, "eds"); !errors.Is(err, tenant.ErrNotRedeemable) {
+		t.Fatalf("redeem for another name: %v, want ErrNotRedeemable", err)
+	}
+	// Presenting it for the wrong name spent it.
+	if err := svc.Redeem(ctx, adm.EnrollmentToken, "tdemo"); !errors.Is(err, tenant.ErrNotRedeemable) {
+		t.Fatalf("redeem after a mismatch: %v, want ErrNotRedeemable", err)
+	}
+
+	adm, _ = svc.Admit(ctx, "tdemo")
+	if err := svc.Redeem(ctx, adm.EnrollmentToken, "tdemo"); err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	if err := svc.Redeem(ctx, adm.EnrollmentToken, "tdemo"); !errors.Is(err, tenant.ErrNotRedeemable) {
+		t.Fatalf("second redeem: %v, want ErrNotRedeemable", err)
+	}
+
+	if _, err := svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Admit(ctx, "tdemo"); !errors.Is(err, tenant.ErrExists) {
+		t.Fatalf("admitting a registered name: %v, want ErrExists", err)
+	}
+
+	svc.Enroller = nil
+	if _, err := svc.Admit(ctx, "grooveiq"); !errors.Is(err, tenant.ErrNoEnrollment) {
+		t.Fatalf("admit without an enroller: %v", err)
+	}
+}
+
+func TestAuthenticate(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	res, err := svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := svc.Authenticate(ctx, res.Issued.APIToken); !ok || c.Tenant != "tdemo" || !c.Registered {
+		t.Fatalf("current token: %+v %v", c, ok)
+	}
+
+	// Another token the API issued for tdemo, but not the one the registry
+	// holds: revoked.
+	stale, _ := testTokens.Issue("tdemo")
+	if _, ok := svc.Authenticate(ctx, stale); ok {
+		t.Error("a token the registry does not hold was accepted for a registered tenant")
+	}
+
+	// The registry does not know eds: its genuine token authenticates as an
+	// unregistered caller, which may only restore itself.
+	edsTok, _ := testTokens.Issue("eds")
+	if c, ok := svc.Authenticate(ctx, edsTok); !ok || c.Tenant != "eds" || c.Registered {
+		t.Fatalf("unregistered tenant: %+v %v", c, ok)
+	}
+	if _, ok := svc.Authenticate(ctx, "dvt1.eds.forged.mac"); ok {
+		t.Error("a forged token authenticated")
 	}
 }

@@ -37,6 +37,12 @@ make stage    # save the image under the Builder's artifact root (needs a clean,
   is resumed by calling it again, and existing objects (eds's, from Ansible) are adopted.
 - **The tenant's state holds the authoritative secrets** (ADR-0015 §4). Supplied secrets win over
   stored ones; the API token is stored only as a hash.
+- **Secrets live in OpenBao** (ADR-0016): backend credentials in KV, stored tenant secrets sealed
+  with Transit, enrollment tokens by response wrapping. Env credentials are for tests and local
+  runs only. `internal/openbao` is plain net/http on purpose.
+- **Tenant tokens verify without the registry.** `dvt1.<tenant>.<nonce>.<mac>`, keyed by
+  `token_hmac_key` in OpenBao, so a tenant can restore itself after the database is lost. The
+  registry's hash revokes. Don't replace them with random opaque tokens.
 - **Allocation reads the fabric.** An index is free only if no registry row holds it and no SDN
   zone or VNet carries its numbers. Don't shortcut to the database alone.
 - **The Proxmox backend only reads.** The API never writes to a hypervisor; egress is pulled by
