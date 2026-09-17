@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -21,12 +22,16 @@ import (
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 )
 
-// Client is a tenant.Fabric.
+// Client reads the fabric (tenant.Fabric) and builds tenant networks and
+// workloads (tenant.Network, tenant.Compute).
 type Client struct {
 	base string // https://10.20.99.22:8006/api2/json
 	auth string
 	site tenant.Site
 	http *http.Client
+
+	// TaskTimeout bounds a clone, start, stop or delete. Default 10 minutes.
+	TaskTimeout time.Duration
 }
 
 // New takes the node's API root, for example https://10.20.99.22:8006, and a
@@ -41,7 +46,7 @@ func New(apiURL, tokenID, tokenSecret string, site tenant.Site, insecureTLS bool
 		base: strings.TrimRight(apiURL, "/") + "/api2/json",
 		auth: fmt.Sprintf("PVEAPIToken=%s=%s", tokenID, tokenSecret),
 		site: site,
-		http: &http.Client{Timeout: 15 * time.Second, Transport: tr},
+		http: &http.Client{Timeout: 60 * time.Second, Transport: tr},
 	}
 }
 
@@ -125,28 +130,72 @@ func claims(site tenant.Site, zones []zone, vnets []vnet) []tenant.Claim {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
+	return c.request(ctx, http.MethodGet, path, nil, out)
+}
+
+func (c *Client) post(ctx context.Context, path string, body map[string]string) error {
+	return c.request(ctx, http.MethodPost, path, body, nil)
+}
+
+func (c *Client) delete(ctx context.Context, path string) error {
+	return c.request(ctx, http.MethodDelete, path, nil, nil)
+}
+
+// request calls the Proxmox API. Bodies are form-encoded, which is what the
+// API takes; out is filled from the response's "data" when it is not nil.
+func (c *Client) request(ctx context.Context, method, path string, body map[string]string, out any) error {
+	var reader io.Reader
+	if body != nil {
+		form := url.Values{}
+		for k, v := range body {
+			form.Set(k, v)
+		}
+		reader = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", c.auth)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %d", path, resp.StatusCode)
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return errNotFound
+	// Reading an absent SDN object answers 500 with "does not exist", not 404,
+	// so "is it there" has to read the message (checked on PVE 8.4).
+	case method == http.MethodGet && resp.StatusCode == http.StatusInternalServerError &&
+		strings.Contains(string(raw), "does not exist"):
+		return errNotFound
+	case resp.StatusCode >= 300:
+		// Proxmox puts the reason in the status line and in "errors".
+		msg := strings.TrimSpace(string(raw))
+		if len(msg) > 300 {
+			msg = msg[:300] + "..."
+		}
+		return fmt.Errorf("%s %s: %d %s", method, path, resp.StatusCode, msg)
+	}
+	if out == nil || len(raw) == 0 {
+		return nil
 	}
 	var env struct {
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("GET %s: decoding response: %w", path, err)
+		return fmt.Errorf("%s %s: decoding response: %w", method, path, err)
+	}
+	if len(env.Data) == 0 || string(env.Data) == "null" {
+		return nil
 	}
 	if err := json.Unmarshal(env.Data, out); err != nil {
-		return fmt.Errorf("GET %s: decoding data: %w", path, err)
+		return fmt.Errorf("%s %s: decoding data: %w", method, path, err)
 	}
 	return nil
 }

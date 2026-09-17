@@ -14,9 +14,11 @@ import (
 
 // Store is an in-memory tenant.Store.
 type Store struct {
-	mu       sync.Mutex
-	records  map[string]tenant.Record
-	AuditLog []tenant.AuditEntry
+	mu           sync.Mutex
+	records      map[string]tenant.Record
+	workloads    map[string]tenant.Workload
+	extraRecords map[string]tenant.ExtraRecord
+	AuditLog     []tenant.AuditEntry
 }
 
 func NewStore() *Store { return &Store{records: map[string]tenant.Record{}} }
@@ -124,22 +126,143 @@ func (s *Store) update(name string, fn func(*tenant.Record)) error {
 	return nil
 }
 
+// --- Workloads and records ---------------------------------------------------
+
+func (s *Store) CreateWorkload(_ context.Context, w tenant.Workload) (tenant.Workload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workloads == nil {
+		s.workloads = map[string]tenant.Workload{}
+	}
+	key := w.Tenant + "/" + w.Name
+	if old, ok := s.workloads[key]; ok {
+		w.Ordinal, w.VMID, w.MAC, w.Address = old.Ordinal, old.VMID, old.MAC, old.Address
+		w.Status, w.CreatedAt = old.Status, old.CreatedAt
+		s.workloads[key] = w
+		return w, nil
+	}
+	taken := map[int]bool{}
+	for _, x := range s.workloads {
+		if x.Tenant == w.Tenant {
+			taken[x.Ordinal] = true
+		}
+	}
+	rec := s.records[w.Tenant]
+	for n := 0; n < tenant.MaxWorkloads; n++ {
+		if taken[n] {
+			continue
+		}
+		site := MobileSite()
+		w.Ordinal = n
+		w.VMID = site.WorkloadVMID(rec.Index, n)
+		w.MAC = site.MAC(w.VMID)
+		w.Address = site.WorkloadAddress(rec.Index, n)
+		w.CreatedAt = time.Now()
+		s.workloads[key] = w
+		return w, nil
+	}
+	return tenant.Workload{}, tenant.ErrWorkloadsExhausted
+}
+
+func (s *Store) GetWorkload(_ context.Context, tenantName, name string) (tenant.Workload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.workloads[tenantName+"/"+name]
+	if !ok {
+		return tenant.Workload{}, tenant.ErrNotFound
+	}
+	return w, nil
+}
+
+func (s *Store) ListWorkloads(_ context.Context, tenantName string) ([]tenant.Workload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.Workload
+	for _, w := range s.workloads {
+		if w.Tenant == tenantName {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) SetWorkloadStatus(_ context.Context, tenantName, name string, status tenant.Status) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.workloads[tenantName+"/"+name]
+	if !ok {
+		return tenant.ErrNotFound
+	}
+	w.Status = status
+	s.workloads[tenantName+"/"+name] = w
+	return nil
+}
+
+func (s *Store) DeleteWorkload(_ context.Context, tenantName, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.workloads[tenantName+"/"+name]; !ok {
+		return tenant.ErrNotFound
+	}
+	delete(s.workloads, tenantName+"/"+name)
+	return nil
+}
+
+func (s *Store) PutRecord(_ context.Context, r tenant.ExtraRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.extraRecords == nil {
+		s.extraRecords = map[string]tenant.ExtraRecord{}
+	}
+	s.extraRecords[r.Tenant+"/"+r.Name] = r
+	return nil
+}
+
+func (s *Store) ListRecords(_ context.Context, tenantName string) ([]tenant.ExtraRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.ExtraRecord
+	for _, r := range s.extraRecords {
+		if r.Tenant == tenantName {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteRecord(_ context.Context, tenantName, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.extraRecords[tenantName+"/"+name]; !ok {
+		return tenant.ErrNotFound
+	}
+	delete(s.extraRecords, tenantName+"/"+name)
+	return nil
+}
+
 // Backends records what the service asked of each backing service, and fails
 // a step on demand.
 type Backends struct {
 	mu sync.Mutex
 
 	DNSTenants   map[string]tenant.DNSTenant
+	DNSRecords   map[string]tenant.DNSRecord
+	Networks     map[string]tenant.NetworkSpec
+	Workloads    map[int]tenant.WorkloadSpec
 	Forwards     map[string]tenant.Forward
 	States       map[string]tenant.StateTenant
 	FabricClaims []tenant.Claim
 
 	FailDNS, FailResolver, FailState, FailFabric error
+	FailNetwork, FailCompute                     error
 }
 
 func NewBackends() *Backends {
 	return &Backends{
 		DNSTenants: map[string]tenant.DNSTenant{},
+		DNSRecords: map[string]tenant.DNSRecord{},
+		Networks:   map[string]tenant.NetworkSpec{},
+		Workloads:  map[int]tenant.WorkloadSpec{},
 		Forwards:   map[string]tenant.Forward{},
 		States:     map[string]tenant.StateTenant{},
 	}
@@ -150,6 +273,52 @@ func (b *Backends) DNS() tenant.DNS           { return dnsFake{b} }
 func (b *Backends) Resolver() tenant.Resolver { return resolverFake{b} }
 func (b *Backends) State() tenant.StateStore  { return stateFake{b} }
 func (b *Backends) Fabric() tenant.Fabric     { return fabricFake{b} }
+func (b *Backends) Network() tenant.Network   { return networkFake{b} }
+func (b *Backends) Compute() tenant.Compute   { return computeFake{b} }
+
+type networkFake struct{ b *Backends }
+
+func (f networkFake) Ensure(_ context.Context, n tenant.NetworkSpec) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailNetwork != nil {
+		return f.b.FailNetwork
+	}
+	f.b.Networks[n.Zone] = n
+	return nil
+}
+
+func (f networkFake) Remove(_ context.Context, n tenant.NetworkSpec) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailNetwork != nil {
+		return f.b.FailNetwork
+	}
+	delete(f.b.Networks, n.Zone)
+	return nil
+}
+
+type computeFake struct{ b *Backends }
+
+func (f computeFake) EnsureWorkload(_ context.Context, w tenant.WorkloadSpec) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailCompute != nil {
+		return f.b.FailCompute
+	}
+	f.b.Workloads[w.VMID] = w
+	return nil
+}
+
+func (f computeFake) RemoveWorkload(_ context.Context, _ string, vmid int) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailCompute != nil {
+		return f.b.FailCompute
+	}
+	delete(f.b.Workloads, vmid)
+	return nil
+}
 
 type dnsFake struct{ b *Backends }
 
@@ -170,6 +339,30 @@ func (f dnsFake) Remove(_ context.Context, t tenant.DNSTenant) error {
 		return f.b.FailDNS
 	}
 	delete(f.b.DNSTenants, t.KeyName)
+	return nil
+}
+
+func (f dnsFake) EnsureRecords(_ context.Context, zone, _ string, recs []tenant.DNSRecord) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailDNS != nil {
+		return f.b.FailDNS
+	}
+	for _, r := range recs {
+		f.b.DNSRecords[r.Name+"."+zone] = r
+	}
+	return nil
+}
+
+func (f dnsFake) RemoveRecords(_ context.Context, zone, _ string, recs []tenant.DNSRecord) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailDNS != nil {
+		return f.b.FailDNS
+	}
+	for _, r := range recs {
+		delete(f.b.DNSRecords, r.Name+"."+zone)
+	}
 	return nil
 }
 
@@ -248,6 +441,12 @@ func MobileSite() tenant.Site {
 		StateEndpoint:     "http://tfstate.mobile.deevnet.net:9000",
 		StateBucket:       "tf-state",
 		ResolverForwardTo: "10.20.25.21",
+		TenantVMIDBase:    2000,
+		MACNamespace:      "02:de:20",
+		TemplatePrefix:    "fedora-server-",
+		Storage:           "local-lvm",
+		Disk:              "scsi0",
+		CIUser:            "a_autoprov",
 	}
 }
 
@@ -299,6 +498,8 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		Resolver: b.Resolver(),
 		State:    b.State(),
 		Fabric:   b.Fabric(),
+		Network:  b.Network(),
+		Compute:  b.Compute(),
 		Tokens:   tokens,
 		Enroller: &Enroller{},
 	}, st, b

@@ -56,8 +56,12 @@ func TestCreateAllocatesLowestFreeIndexAndEnsuresEveryBackend(t *testing.T) {
 	if string(rec.Secrets.APITokenHash) != string(tenant.HashToken(res.Issued.APIToken)) {
 		t.Error("the registry does not hold the token's hash")
 	}
-	if len(rec.Steps) != 3 {
-		t.Errorf("steps recorded = %v, want dns, resolver and state", rec.Steps)
+	if len(rec.Steps) != 4 {
+		t.Errorf("steps recorded = %v, want dns, resolver, state and network", rec.Steps)
+	}
+	net, ok := b.Networks["tdemo"]
+	if !ok || net.VRFVNI != 10002 || net.Subnet != "10.20.130.0/24" || net.VNets[0].ID != "tdemo0" || net.VNets[0].Tag != 20020 {
+		t.Errorf("network = %+v", net)
 	}
 }
 
@@ -221,19 +225,143 @@ func TestFailedStepLeavesTheTenantResumable(t *testing.T) {
 	}
 }
 
-func TestDeleteIsRefusedWhileTheFabricCarriesTheZone(t *testing.T) {
+func TestDeleteIsRefusedWhileTheTenantHasWorkloads(t *testing.T) {
 	svc, _, b := tenanttest.NewService()
-	res, err := svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"})
+	if _, err := svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateWorkload(ctx, "tdemo", tenant.WorkloadRequest{Name: "web"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(ctx, "tdemo"); !errors.Is(err, tenant.ErrHasWorkloads) {
+		t.Fatalf("err = %v, want ErrHasWorkloads", err)
+	}
+	if len(b.DNSTenants) != 1 || len(b.Networks) != 1 {
+		t.Fatal("something was removed although the delete was refused")
+	}
+
+	if err := svc.DeleteWorkload(ctx, "tdemo", "web"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Delete(ctx, "tdemo"); err != nil {
+		t.Fatalf("delete after the workload went: %v", err)
+	}
+	if len(b.Networks) != 0 {
+		t.Error("the network survived the tenant")
+	}
+}
+
+func TestWorkloadsDeriveTheirIdentity(t *testing.T) {
+	svc, _, b := tenanttest.NewService()
+	if _, err := svc.Create(ctx, tenant.CreateRequest{Name: "eds"}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := svc.CreateWorkload(ctx, "eds", tenant.WorkloadRequest{Name: "svc", SSHKeys: []string{"ssh-ed25519 AAAA"}})
+	if err != nil {
+		t.Fatalf("create workload: %v", err)
+	}
+	// index 1, ordinal 0: VMID 2000 + 1*40 + 0, .10, and the MAC from the VMID.
+	if first.Ordinal != 0 || first.VMID != 2040 || first.Address != "10.20.129.10" || first.MAC != "02:de:20:00:07:f8" {
+		t.Fatalf("workload = %+v", first)
+	}
+	if first.Status != tenant.StatusReady || first.Cores != 2 || first.MemoryMB != 2048 {
+		t.Fatalf("workload = %+v, want ready with the default sizing", first)
+	}
+	spec := b.Workloads[first.VMID]
+	if spec.Name != "eds-svc" || spec.Bridge != "eds0" || spec.Address != "10.20.129.10/24" || spec.Gateway != "10.20.129.1" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	if spec.TemplatePrefix != "fedora-server-" || spec.CIUser != "a_autoprov" || spec.SSHKeys[0] != "ssh-ed25519 AAAA" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	if r, ok := b.DNSRecords["svc.eds.mobile.deevnet.net"]; !ok || r.Address != "10.20.129.10" {
+		t.Fatalf("workload name not published: %v", b.DNSRecords)
+	}
+
+	second, err := svc.CreateWorkload(ctx, "eds", tenant.WorkloadRequest{Name: "other", Cores: 4, MemoryMB: 4096, DiskGB: 40})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.FabricClaims = []tenant.Claim{{Index: res.Record.Index, Zone: "tdemo"}}
-
-	if err := svc.Delete(ctx, "tdemo"); !errors.Is(err, tenant.ErrFabricInUse) {
-		t.Fatalf("err = %v, want ErrFabricInUse", err)
+	if second.Ordinal != 1 || second.VMID != 2041 || second.Address != "10.20.129.11" {
+		t.Fatalf("second workload = %+v", second)
 	}
-	if len(b.DNSTenants) != 1 {
-		t.Fatal("DNS was removed although the delete was refused")
+	if spec := b.Workloads[second.VMID]; spec.Cores != 4 || spec.MemoryMB != 4096 || spec.DiskGB != 40 || spec.Disk != "scsi0" {
+		t.Fatalf("second spec = %+v", spec)
+	}
+
+	// Re-applying keeps identity and takes the new sizing.
+	again, err := svc.CreateWorkload(ctx, "eds", tenant.WorkloadRequest{Name: "svc", Cores: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.VMID != first.VMID || again.Address != first.Address || again.Cores != 8 {
+		t.Fatalf("re-applied = %+v", again)
+	}
+
+	if err := svc.DeleteWorkload(ctx, "eds", "svc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.Workloads[first.VMID]; ok {
+		t.Error("the VM survived")
+	}
+	if _, ok := b.DNSRecords["svc.eds.mobile.deevnet.net"]; ok {
+		t.Error("the published name survived")
+	}
+	// The freed ordinal is reused, so addressing stays dense.
+	third, err := svc.CreateWorkload(ctx, "eds", tenant.WorkloadRequest{Name: "third"})
+	if err != nil || third.Ordinal != 0 {
+		t.Fatalf("third = %+v %v, want the freed ordinal", third, err)
+	}
+}
+
+func TestWorkloadValidation(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	if _, err := svc.CreateWorkload(ctx, "nobody", tenant.WorkloadRequest{Name: "web"}); !errors.Is(err, tenant.ErrNotFound) {
+		t.Errorf("unknown tenant: %v", err)
+	}
+	if _, err := svc.Create(ctx, tenant.CreateRequest{Name: "eds"}); err != nil {
+		t.Fatal(err)
+	}
+	var inv *tenant.InvalidError
+	for _, name := range []string{"", "UPPER", "-lead", "trail-", strings.Repeat("x", 21)} {
+		if _, err := svc.CreateWorkload(ctx, "eds", tenant.WorkloadRequest{Name: name}); !errors.As(err, &inv) {
+			t.Errorf("name %q: %v, want InvalidError", name, err)
+		}
+	}
+}
+
+func TestExtraRecords(t *testing.T) {
+	svc, _, b := tenanttest.NewService()
+	if _, err := svc.Create(ctx, tenant.CreateRequest{Name: "eds"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.PutRecord(ctx, "eds", "lightd", "10.20.129.10"); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := b.DNSRecords["lightd.eds.mobile.deevnet.net"]; !ok || r.Address != "10.20.129.10" {
+		t.Fatalf("records = %v", b.DNSRecords)
+	}
+	var inv *tenant.InvalidError
+	if err := svc.PutRecord(ctx, "eds", "elsewhere", "10.20.130.10"); !errors.As(err, &inv) {
+		t.Errorf("an address outside the tenant subnet: %v, want InvalidError", err)
+	}
+	if err := svc.PutRecord(ctx, "eds", "bad name", "10.20.129.11"); !errors.As(err, &inv) {
+		t.Errorf("an invalid name: %v", err)
+	}
+	recs, err := svc.ListRecords(ctx, "eds")
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("list = %v %v", recs, err)
+	}
+	if err := svc.DeleteRecord(ctx, "eds", "lightd"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.DNSRecords["lightd.eds.mobile.deevnet.net"]; ok {
+		t.Error("the name survived")
+	}
+	if err := svc.DeleteRecord(ctx, "eds", "lightd"); !errors.Is(err, tenant.ErrNotFound) {
+		t.Errorf("second delete: %v", err)
 	}
 }
 

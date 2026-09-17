@@ -37,6 +37,12 @@ func fullEnv() map[string]string {
 		"PROXMOX_TOKEN_ID":            "deevnet-api@pve!tenants",
 		"PROXMOX_TOKEN_SECRET":        "s",
 		"TOKEN_HMAC_KEY":              "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+		"DEEVNET_TENANT_VMID_BASE":    "2000",
+		"DEEVNET_MAC_NAMESPACE":       "02:de:20",
+		"DEEVNET_TEMPLATE_PREFIX":     "fedora-server-",
+		"DEEVNET_TENANT_STORAGE":      "local-lvm",
+		"DEEVNET_TENANT_DISK":         "scsi0",
+		"DEEVNET_TENANT_CIUSER":       "a_autoprov",
 	}
 }
 
@@ -59,8 +65,11 @@ func TestFullEnvBuildsTheService(t *testing.T) {
 	if got := strings.Join(svc.Site.DNSUpdateFrom, "|"); got != "10.20.99.0/24|10.20.10.0/24|10.20.50.0/24" {
 		t.Errorf("update-from = %s", got)
 	}
-	if svc.DNS == nil || svc.Resolver == nil || svc.State == nil || svc.Fabric == nil {
+	if svc.DNS == nil || svc.Resolver == nil || svc.State == nil || svc.Fabric == nil || svc.Network == nil || svc.Compute == nil {
 		t.Error("a backend is missing")
+	}
+	if svc.Site.WorkloadVMID(1, 0) != 2040 || svc.Site.MAC(2040) != "02:de:20:00:07:f8" {
+		t.Errorf("workload numbering: vmid %d mac %s", svc.Site.WorkloadVMID(1, 0), svc.Site.MAC(2040))
 	}
 }
 

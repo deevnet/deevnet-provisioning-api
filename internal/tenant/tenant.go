@@ -26,6 +26,7 @@ const (
 	StepDNS      = "dns"
 	StepResolver = "resolver"
 	StepState    = "state"
+	StepNetwork  = "network"
 )
 
 // Secrets are what the API keeps for a tenant. The TSIG and state secrets are
@@ -43,6 +44,32 @@ type Step struct {
 	OK        bool      `json:"ok"`
 	Error     string    `json:"error,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Workload is a tenant VM as the registry holds it.
+type Workload struct {
+	Tenant   string
+	Name     string
+	Ordinal  int
+	VMID     int
+	MAC      string
+	Address  string // the bare address, e.g. 10.20.129.10
+	Cores    int
+	MemoryMB int
+	DiskGB   int
+	SSHKeys  []string
+	Status   Status
+	// Kind tells a workload's own record apart from a name the tenant added.
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// ExtraRecord is a name a tenant publishes beside its workloads' own names.
+type ExtraRecord struct {
+	Tenant    string
+	Name      string
+	Address   string
+	CreatedAt time.Time
 }
 
 // Record is a tenant as the registry holds it.
@@ -75,6 +102,19 @@ type Store interface {
 	// returns ErrExists if the name is already registered.
 	Create(ctx context.Context, name string, secrets Secrets, pick func(held map[int]string) (int, error)) (Record, error)
 
+	// Workloads. CreateWorkload allocates the ordinal under the same lock that
+	// allocates an index, so two creates cannot share one.
+	CreateWorkload(ctx context.Context, w Workload) (Workload, error)
+	GetWorkload(ctx context.Context, tenantName, name string) (Workload, error)
+	ListWorkloads(ctx context.Context, tenantName string) ([]Workload, error)
+	SetWorkloadStatus(ctx context.Context, tenantName, name string, status Status) error
+	DeleteWorkload(ctx context.Context, tenantName, name string) error
+
+	// Extra records (ADR-0015 §13).
+	PutRecord(ctx context.Context, r ExtraRecord) error
+	ListRecords(ctx context.Context, tenantName string) ([]ExtraRecord, error)
+	DeleteRecord(ctx context.Context, tenantName, name string) error
+
 	SetStatus(ctx context.Context, name string, status Status) error
 	SetSecrets(ctx context.Context, name string, secrets Secrets) error
 	RecordStep(ctx context.Context, name, step string, stepErr error) error
@@ -100,6 +140,12 @@ type DNS interface {
 	Ensure(ctx context.Context, t DNSTenant) error
 	// Remove deletes the zones and the key. Absent objects are not an error.
 	Remove(ctx context.Context, t DNSTenant) error
+	// EnsureRecords publishes A records in the tenant's zone and the matching
+	// PTRs in its reverse zone (ADR-0015 §13).
+	EnsureRecords(ctx context.Context, zone, reverseZone string, recs []DNSRecord) error
+	// RemoveRecords deletes those names and their PTRs. Absent names are not an
+	// error.
+	RemoveRecords(ctx context.Context, zone, reverseZone string, recs []DNSRecord) error
 }
 
 // Forward is one resolver forwarding entry: queries for Domain go to Server.
@@ -127,6 +173,64 @@ type StateTenant struct {
 type StateStore interface {
 	Ensure(ctx context.Context, t StateTenant) error
 	Remove(ctx context.Context, user string) error
+}
+
+// VNetSpec is one VNet of a tenant network: the bridge name workloads attach
+// to, and its VXLAN tag.
+type VNetSpec struct {
+	ID  string
+	Tag int
+}
+
+// NetworkSpec is a tenant's network on the fabric (ADR-0015 §11).
+type NetworkSpec struct {
+	Zone       string
+	Controller string
+	Node       string
+	VRFVNI     int
+	VNets      []VNetSpec
+	Subnet     string
+	Gateway    string
+}
+
+// Network builds a tenant's network on the fabric.
+type Network interface {
+	Ensure(ctx context.Context, n NetworkSpec) error
+	Remove(ctx context.Context, n NetworkSpec) error
+}
+
+// WorkloadSpec is one VM as the hypervisor needs it (ADR-0015 §12). Everything
+// here except the tenant's own choices is derived by the API.
+type WorkloadSpec struct {
+	Name           string
+	Node           string
+	VMID           int
+	MAC            string
+	Bridge         string
+	Address        string // CIDR, e.g. 10.20.129.10/24
+	Gateway        string
+	Nameserver     string
+	Cores          int
+	MemoryMB       int
+	DiskGB         int
+	Disk           string // which disk to grow, e.g. scsi0
+	Storage        string
+	CIUser         string
+	SSHKeys        []string
+	Tags           []string
+	TemplatePrefix string
+}
+
+// Compute builds a tenant's workloads.
+type Compute interface {
+	EnsureWorkload(ctx context.Context, w WorkloadSpec) error
+	RemoveWorkload(ctx context.Context, node string, vmid int) error
+}
+
+// DNSRecord is one name a tenant publishes: a label in its own zone.
+type DNSRecord struct {
+	Name    string // label, e.g. "web" or "eds-1"
+	Address string
 }
 
 // Claim is an index the live fabric is using, and the zone using it.
@@ -160,6 +264,10 @@ var (
 	// ErrNoEnrollment: the API runs without an Enroller, so only the operator
 	// creates tenants.
 	ErrNoEnrollment = errors.New("enrollment is not configured")
+	// ErrHasWorkloads: a tenant with workloads is not deleted (ADR-0015 §2).
+	ErrHasWorkloads = errors.New("the tenant still has workloads")
+	// ErrWorkloadsExhausted: the tenant's workload ordinals are all taken.
+	ErrWorkloadsExhausted = errors.New("no free workload ordinal")
 )
 
 // InvalidError is a request the API refuses to act on.

@@ -85,6 +85,9 @@ func run(logger *slog.Logger) error {
 	if w.sealer != nil {
 		reg.WithSealer(w.sealer)
 	}
+	if w.tenants != nil {
+		reg.WithSite(w.site)
+	}
 	if tenants != nil {
 		tenants.Store = reg
 		tenants.Logger = logger

@@ -13,6 +13,7 @@ container, are `deevnet-api`.
 - it allocates the index against its registry and the live fabric
 - it ensures the tenant's DNS zones and TSIG key, the core router's delegation, and the state-store
   user
+- it builds the tenant's network on the fabric, its workloads, and their names
 - it returns every value and secret the tenant needs
 
 The IoT resources of ADR-0012 arrive later; their routes still answer `501`. The full contract is
@@ -31,6 +32,9 @@ The IoT resources of ADR-0012 arrive later; their routes still answer `501`. The
 | `GET /v1/tenants/{name}` | operator or the tenant | one tenant, without secrets |
 | `POST /v1/tenants/{name}/reconcile` | operator | re-ensure every backend |
 | `DELETE /v1/tenants/{name}` | operator or the tenant | remove a tenant whose fabric resources are gone |
+| `POST /v1/tenants/{name}/workloads` | operator or the tenant | build a VM in the tenant's network |
+| `GET`, `DELETE` `/v1/tenants/{name}/workloads[/{workload}]` | operator or the tenant | list, read, remove |
+| `PUT`, `GET`, `DELETE` `/v1/tenants/{name}/records[/{record}]` | operator or the tenant | names beside the workloads' own |
 | `GET /v1/fabric/egress` | operator | the VRFs the exit node routes |
 | any other `/v1/*` | operator or a tenant | `401` without a valid token; `501` with one |
 
@@ -63,6 +67,11 @@ API refuses to start if any is empty.
 | `OPNSENSE_API_URL` | `https://10.20.25.1/api` | the core router |
 | `MINIO_ADMIN_ENDPOINT` | `10.20.25.20:9000` | the state store's admin API |
 | `PROXMOX_API_URL` | `https://10.20.99.22:8006` | the tenant hypervisor |
+| `DEEVNET_TENANT_VMID_BASE` | `2000` | first VMID of the tenant band |
+| `DEEVNET_MAC_NAMESPACE` | `02:de:20` | a workload's MAC derives from its VMID |
+| `DEEVNET_TEMPLATE_PREFIX` | `fedora-server-` | the newest match is cloned |
+| `DEEVNET_TENANT_STORAGE`, `DEEVNET_TENANT_DISK` | `local-lvm`, `scsi0` | where a workload lands, and the disk grown |
+| `DEEVNET_TENANT_CIUSER` | `a_autoprov` | the cloud-init account the tenant's keys go to |
 
 **Backend credentials come from OpenBao** (ADR-0016) when `OPENBAO_ADDR` is set: the fields of one
 KV v2 secret.
@@ -116,7 +125,7 @@ internal/openbao/       KV, Transit and response wrapping over OpenBao's HTTP AP
 internal/tenant/        ADR-0015's rules: allocation, restore, the backend step order
 internal/tenant/tenanttest/  in-memory registry and backends for tests
 internal/store/         the registry in PostgreSQL, with embedded migrations
-internal/backend/       powerdns, opnsense (the resolver), minio (state store), proxmox (fabric, read-only)
+internal/backend/       powerdns (zones, keys, records), opnsense (the resolver), minio (state store), proxmox (fabric, networks, workloads)
 docs/api-v1.md          the tenant API contract
 Containerfile           multi-stage build to a static, non-root distroless image
 ```

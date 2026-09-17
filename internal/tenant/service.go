@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -66,12 +69,19 @@ type Service struct {
 	Resolver Resolver
 	State    StateStore
 	Fabric   Fabric
+	// Network and Compute build the tenant's network and workloads (ADR-0015
+	// §11, §12).
+	Network Network
+	Compute Compute
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.
 	Enroller      Enroller
 	EnrollmentTTL time.Duration
 	Logger        *slog.Logger
+
+	// sdn serialises SDN applies, which are cluster-wide.
+	sdn sync.Mutex
 }
 
 const operator = "operator"
@@ -257,12 +267,22 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return err
 	}
 
+	// The tenant's own workloads are destroyed first: the API will not remove a
+	// network under a running VM (ADR-0015 §2).
+	workloads, err := s.Store.ListWorkloads(ctx, name)
+	if err != nil {
+		return err
+	}
+	if len(workloads) > 0 {
+		return ErrHasWorkloads
+	}
+	// A zone on the fabric that the API did not build is also in the way.
 	claims, err := s.Fabric.Claims(ctx)
 	if err != nil {
 		return &StepError{Step: "fabric", Err: err}
 	}
 	for _, c := range claims {
-		if c.Zone == name {
+		if c.Zone == name && s.Network == nil {
 			return ErrFabricInUse
 		}
 	}
@@ -277,6 +297,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		name string
 		run  func() error
 	}{
+		{StepNetwork, func() error { return s.removeNetwork(ctx, rec) }},
 		{StepResolver, func() error { return s.Resolver.Remove(ctx, s.zones(rec)) }},
 		{StepDNS, func() error { return s.DNS.Remove(ctx, s.dnsTenant(rec)) }},
 		{StepState, func() error { return s.State.Remove(ctx, rec.Name) }},
@@ -288,6 +309,234 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		}
 	}
 	return s.Store.Delete(ctx, name)
+}
+
+// network builds the tenant's fabric objects. SDN apply is cluster-wide, so
+// this is serialised across tenants (ADR-0015 §11).
+func (s *Service) network(ctx context.Context, rec Record) error {
+	if s.Network == nil {
+		return nil
+	}
+	s.sdn.Lock()
+	defer s.sdn.Unlock()
+	return s.Network.Ensure(ctx, s.Site.Network(rec.Name, rec.Index))
+}
+
+func (s *Service) removeNetwork(ctx context.Context, rec Record) error {
+	if s.Network == nil {
+		return nil
+	}
+	s.sdn.Lock()
+	defer s.sdn.Unlock()
+	return s.Network.Remove(ctx, s.Site.Network(rec.Name, rec.Index))
+}
+
+// --- Workloads (ADR-0015 §12) ------------------------------------------------
+
+// WorkloadRequest is what a tenant declares. Everything else is derived.
+type WorkloadRequest struct {
+	Name     string
+	Cores    int
+	MemoryMB int
+	DiskGB   int
+	SSHKeys  []string
+}
+
+// CreateWorkload builds a VM in the tenant's network and publishes its name.
+// Calling it again for the same name re-applies, so a restore converges.
+func (s *Service) CreateWorkload(ctx context.Context, tenantName string, req WorkloadRequest) (Workload, error) {
+	if s.Compute == nil {
+		return Workload{}, invalid("this API builds no workloads")
+	}
+	rec, err := s.Store.Get(ctx, tenantName)
+	if err != nil {
+		return Workload{}, err
+	}
+	if rec.Status != StatusReady {
+		return Workload{}, invalid("tenant %q is %s", tenantName, rec.Status)
+	}
+	if !ValidWorkloadName(req.Name) {
+		return Workload{}, invalid("workload name must be 1-20 lowercase alphanumerics or dashes, starting with a letter")
+	}
+	if req.Cores < 0 || req.MemoryMB < 0 || req.DiskGB < 0 {
+		return Workload{}, invalid("cores, memory and disk cannot be negative")
+	}
+
+	w, err := s.Store.GetWorkload(ctx, tenantName, req.Name)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		w = Workload{
+			Tenant:   tenantName,
+			Name:     req.Name,
+			Cores:    orDefaultInt(req.Cores, 2),
+			MemoryMB: orDefaultInt(req.MemoryMB, 2048),
+			DiskGB:   req.DiskGB,
+			SSHKeys:  req.SSHKeys,
+			Status:   StatusProvisioning,
+		}
+		// The store allocates the ordinal; the rest derives from it.
+		if w, err = s.Store.CreateWorkload(ctx, w); err != nil {
+			return Workload{}, err
+		}
+		s.audit(ctx, "workload-create", tenantName, map[string]any{"workload": w.Name, "ordinal": w.Ordinal, "vmid": w.VMID})
+	case err != nil:
+		return Workload{}, err
+	default:
+		// Re-applying an existing workload keeps its identity and takes the
+		// new sizing.
+		w.Cores = orDefaultInt(req.Cores, w.Cores)
+		w.MemoryMB = orDefaultInt(req.MemoryMB, w.MemoryMB)
+		if req.DiskGB > 0 {
+			w.DiskGB = req.DiskGB
+		}
+		if len(req.SSHKeys) > 0 {
+			w.SSHKeys = req.SSHKeys
+		}
+		if _, err := s.Store.CreateWorkload(ctx, w); err != nil {
+			return Workload{}, err
+		}
+	}
+
+	if err := s.Compute.EnsureWorkload(ctx, s.workloadSpec(rec, w)); err != nil {
+		s.logger().Error("building workload", "tenant", tenantName, "workload", w.Name, "err", err)
+		return w, &StepError{Step: "workload", Err: err}
+	}
+	// The API publishes a workload's own name (ADR-0015 §13).
+	if err := s.DNS.EnsureRecords(ctx, s.Site.Zone(tenantName), s.Site.Numbering(rec.Index).ReverseZone,
+		[]DNSRecord{{Name: w.Name, Address: w.Address}}); err != nil {
+		s.logger().Error("publishing workload", "tenant", tenantName, "workload", w.Name, "err", err)
+		return w, &StepError{Step: StepDNS, Err: err}
+	}
+	if err := s.Store.SetWorkloadStatus(ctx, tenantName, w.Name, StatusReady); err != nil {
+		return w, err
+	}
+	w.Status = StatusReady
+	return w, nil
+}
+
+// GetWorkload returns one workload.
+func (s *Service) GetWorkload(ctx context.Context, tenantName, name string) (Workload, error) {
+	return s.Store.GetWorkload(ctx, tenantName, name)
+}
+
+// ListWorkloads returns a tenant's workloads, by ordinal.
+func (s *Service) ListWorkloads(ctx context.Context, tenantName string) ([]Workload, error) {
+	ws, err := s.Store.ListWorkloads(ctx, tenantName)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(ws, func(i, j int) bool { return ws[i].Ordinal < ws[j].Ordinal })
+	return ws, nil
+}
+
+// DeleteWorkload removes the VM and its published name.
+func (s *Service) DeleteWorkload(ctx context.Context, tenantName, name string) error {
+	rec, err := s.Store.Get(ctx, tenantName)
+	if err != nil {
+		return err
+	}
+	w, err := s.Store.GetWorkload(ctx, tenantName, name)
+	if err != nil {
+		return err
+	}
+	if s.Compute != nil {
+		if err := s.Compute.RemoveWorkload(ctx, s.Site.Node, w.VMID); err != nil {
+			return &StepError{Step: "workload", Err: err}
+		}
+	}
+	if err := s.DNS.RemoveRecords(ctx, s.Site.Zone(tenantName), s.Site.Numbering(rec.Index).ReverseZone,
+		[]DNSRecord{{Name: w.Name, Address: w.Address}}); err != nil {
+		return &StepError{Step: StepDNS, Err: err}
+	}
+	s.audit(ctx, "workload-delete", tenantName, map[string]any{"workload": name, "vmid": w.VMID})
+	return s.Store.DeleteWorkload(ctx, tenantName, name)
+}
+
+func (s *Service) workloadSpec(rec Record, w Workload) WorkloadSpec {
+	net := s.Site.Network(rec.Name, rec.Index)
+	n := s.Site.Numbering(rec.Index)
+	return WorkloadSpec{
+		Name:           rec.Name + "-" + w.Name,
+		Node:           s.Site.Node,
+		VMID:           w.VMID,
+		MAC:            w.MAC,
+		Bridge:         net.VNets[0].ID,
+		Address:        w.Address + "/24",
+		Gateway:        n.Gateway,
+		Nameserver:     s.Site.ResolverForwardTo,
+		Cores:          w.Cores,
+		MemoryMB:       w.MemoryMB,
+		DiskGB:         w.DiskGB,
+		Disk:           s.Site.Disk,
+		Storage:        s.Site.Storage,
+		CIUser:         s.Site.CIUser,
+		SSHKeys:        w.SSHKeys,
+		Tags:           []string{"tenant", rec.Name},
+		TemplatePrefix: s.Site.TemplatePrefix,
+	}
+}
+
+// --- Extra records (ADR-0015 §13) --------------------------------------------
+
+// PutRecord publishes a name in the tenant's zone, beside its workloads'.
+func (s *Service) PutRecord(ctx context.Context, tenantName, name, address string) error {
+	rec, err := s.Store.Get(ctx, tenantName)
+	if err != nil {
+		return err
+	}
+	if !ValidWorkloadName(name) {
+		return invalid("record name must be 1-20 lowercase alphanumerics or dashes, starting with a letter")
+	}
+	if !s.inTenantSubnet(rec, address) {
+		return invalid("address %s is not in the tenant's subnet %s", address, s.Site.Numbering(rec.Index).Subnet)
+	}
+	if err := s.DNS.EnsureRecords(ctx, s.Site.Zone(tenantName), s.Site.Numbering(rec.Index).ReverseZone,
+		[]DNSRecord{{Name: name, Address: address}}); err != nil {
+		return &StepError{Step: StepDNS, Err: err}
+	}
+	return s.Store.PutRecord(ctx, ExtraRecord{Tenant: tenantName, Name: name, Address: address})
+}
+
+// ListRecords returns the names a tenant added beside its workloads'.
+func (s *Service) ListRecords(ctx context.Context, tenantName string) ([]ExtraRecord, error) {
+	return s.Store.ListRecords(ctx, tenantName)
+}
+
+// DeleteRecord removes one of those names.
+func (s *Service) DeleteRecord(ctx context.Context, tenantName, name string) error {
+	rec, err := s.Store.Get(ctx, tenantName)
+	if err != nil {
+		return err
+	}
+	recs, err := s.Store.ListRecords(ctx, tenantName)
+	if err != nil {
+		return err
+	}
+	for _, r := range recs {
+		if r.Name != name {
+			continue
+		}
+		if err := s.DNS.RemoveRecords(ctx, s.Site.Zone(tenantName), s.Site.Numbering(rec.Index).ReverseZone,
+			[]DNSRecord{{Name: r.Name, Address: r.Address}}); err != nil {
+			return &StepError{Step: StepDNS, Err: err}
+		}
+		return s.Store.DeleteRecord(ctx, tenantName, name)
+	}
+	return ErrNotFound
+}
+
+// inTenantSubnet keeps a tenant from publishing a name pointing anywhere but
+// its own subnet.
+func (s *Service) inTenantSubnet(rec Record, address string) bool {
+	prefix := fmt.Sprintf("10.%d.%d.", s.Site.Octet, 128+rec.Index)
+	return strings.HasPrefix(address, prefix) && net.ParseIP(address) != nil
+}
+
+func orDefaultInt(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // EgressVRF is one tenant VRF the exit node gives a default route (ADR-0015 §7).
@@ -323,6 +572,9 @@ func (s *Service) ensure(ctx context.Context, rec Record) (Record, error) {
 		{StepDNS, func() error { return s.DNS.Ensure(ctx, s.dnsTenant(rec)) }},
 		{StepResolver, func() error { return s.Resolver.Ensure(ctx, s.forwards(rec)) }},
 		{StepState, func() error { return s.State.Ensure(ctx, s.stateTenant(rec)) }},
+		// Last, because it is the only step that changes the fabric, and the
+		// tenant's own resources depend on it rather than the other way round.
+		{StepNetwork, func() error { return s.network(ctx, rec) }},
 	}
 	for _, st := range steps {
 		err := st.run()

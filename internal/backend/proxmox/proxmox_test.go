@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,6 +64,31 @@ func TestClaimsFromZonesAndVNets(t *testing.T) {
 	slices.SortFunc(want, func(a, b tenant.Claim) int { return strings.Compare(key(a), key(b)) })
 	if !slices.Equal(got, want) {
 		t.Fatalf("claims\n got %v\nwant %v", got, want)
+	}
+}
+
+func TestAbsentSDNObjectReadsAsNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// What PVE 8.4 answers for a zone that is not there.
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"sdn zone 'tprobe' does not exist
+","data":null}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "t@pve!x", "s", tenanttest.MobileSite(), false)
+	var out map[string]any
+	if err := c.get(context.Background(), "/cluster/sdn/zones/tprobe", &out); !errors.Is(err, errNotFound) {
+		t.Fatalf("err = %v, want errNotFound", err)
+	}
+	// A real 500 is still an error.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"storage is not online"}`))
+	}))
+	defer srv2.Close()
+	c2 := New(srv2.URL, "t@pve!x", "s", tenanttest.MobileSite(), false)
+	if err := c2.get(context.Background(), "/cluster/sdn/zones/tprobe", &out); err == nil || errors.Is(err, errNotFound) {
+		t.Fatalf("err = %v, want a real failure", err)
 	}
 }
 

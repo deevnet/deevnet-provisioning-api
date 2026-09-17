@@ -39,9 +39,18 @@ type Sealer interface {
 type Postgres struct {
 	pool   *pgxpool.Pool
 	sealer Sealer
+	// site derives a workload's VMID, MAC and address from its ordinal, which
+	// the store allocates (ADR-0015 §12).
+	site tenant.Site
 }
 
 func New(pool *pgxpool.Pool) *Postgres { return &Postgres{pool: pool} }
+
+// WithSite gives the store the numbering it needs for workloads.
+func (p *Postgres) WithSite(s tenant.Site) *Postgres {
+	p.site = s
+	return p
+}
 
 // WithSealer stores TSIG and state secrets encrypted. Without one they are
 // stored as they are, which is only for tests and local runs.

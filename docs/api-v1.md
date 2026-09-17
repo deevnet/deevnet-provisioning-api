@@ -85,6 +85,8 @@ A **restore** sends back what the tenant's state holds: the index and all three 
      zone bound to another tenant's key has its records cleared first.
    - `resolver`: the core router forwards both zones to the tenant DNS server
    - `state`: the state-store user and its prefix policy
+   - `network`: the EVPN zone, its VNet and the SNAT subnet, then an SDN apply. Applies are
+     cluster-wide, so the API runs one at a time.
 3. **Mark the tenant `ready`.**
 
 Every step is an ensure. Objects that already exist are adopted and corrected, and a second run
@@ -168,6 +170,52 @@ secrets, or `502` as create does.
 | `409` | the fabric still carries a zone of this name. The tenant destroys its own resources first |
 | `404` | not registered |
 | `502` | a backend step failed. The tenant is left `deleting`, and a second delete resumes it |
+
+## Workloads
+
+A workload is a VM in the tenant's network (ADR-0015 §12). The operator or the tenant may call these.
+
+`POST /v1/tenants/{name}/workloads`
+
+```json
+{ "name": "web", "cores": 2, "memory_mb": 2048, "disk_gb": 40, "ssh_keys": ["ssh-ed25519 AAAA..."] }
+```
+
+- **The tenant chooses** the name, sizing and keys. `cores` and `memory_mb` default to 2 and 2048;
+  `disk_gb` grows the template's disk and never shrinks it.
+- **The API chooses** everything else, and it is stable for the workload's life:
+  - **ordinal:** the lowest free one for that tenant, reused after a delete
+  - **VMID:** `tenant VMID base + index * 40 + ordinal`
+  - **MAC:** derived from the VMID (`standards/mac-naming`)
+  - **address:** `.10 + ordinal` in the tenant's subnet
+  - **node, template, storage:** the site's; the template is the newest by name prefix
+- **It also publishes** `<name>.<tenant zone>` and the matching PTR.
+- **Calling it again** for the same name re-applies: the identity stays, the sizing is taken.
+
+`201` with the workload. `502` when the hypervisor or DNS step fails, with the workload in the body
+so a retry resumes. `409` when the tenant has no free ordinal.
+
+| Route | Does |
+|---|---|
+| `GET /v1/tenants/{name}/workloads` | the tenant's workloads, by ordinal |
+| `GET /v1/tenants/{name}/workloads/{workload}` | one workload |
+| `DELETE /v1/tenants/{name}/workloads/{workload}` | removes the VM and its published names |
+
+**A tenant with workloads is not deleted:** `DELETE /v1/tenants/{name}` answers `409` until they are
+gone.
+
+## Published names
+
+Names beside the workloads' own (ADR-0015 §13), such as eds's `palette` and `lightd`.
+
+| Route | Does |
+|---|---|
+| `PUT /v1/tenants/{name}/records/{record}` with `{"address": "10.20.129.10"}` | publishes `<record>.<tenant zone>` and its PTR |
+| `GET /v1/tenants/{name}/records` | the names the tenant added |
+| `DELETE /v1/tenants/{name}/records/{record}` | removes one |
+
+The address must be in the tenant's own subnet. The tenant's TSIG key still works for anything it
+would rather publish itself (ADR-0004).
 
 ## Egress list
 

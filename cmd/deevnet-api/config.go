@@ -38,6 +38,12 @@ var siteEnv = []string{
 	"OPNSENSE_API_URL",
 	"MINIO_ADMIN_ENDPOINT",
 	"PROXMOX_API_URL",
+	"DEEVNET_TENANT_VMID_BASE",
+	"DEEVNET_MAC_NAMESPACE",
+	"DEEVNET_TEMPLATE_PREFIX",
+	"DEEVNET_TENANT_STORAGE",
+	"DEEVNET_TENANT_DISK",
+	"DEEVNET_TENANT_CIUSER",
 }
 
 // credentials are the backend secrets. With OpenBao (ADR-0016) they are the
@@ -74,10 +80,12 @@ var openbaoEnv = []string{
 //	PROXMOX_INSECURE_TLS   "true": so is the node's
 //	MINIO_ADMIN_TLS        "false"
 
-// wiring is what main needs beyond the service: the store's sealer.
+// wiring is what main needs beyond the service: the store's sealer and the
+// site, which the store uses to derive a workload's identity.
 type wiring struct {
 	tenants *tenant.Service
 	sealer  store.Sealer
+	site    tenant.Site
 }
 
 // tenantService builds the tenant service, or returns nothing when
@@ -138,7 +146,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	}
 
 	ints := map[string]int{}
-	for _, k := range []string{"DEEVNET_SITE_OCTET", "DEEVNET_VRF_VNI_BASE", "DEEVNET_VNET_VNI_BASE"} {
+	for _, k := range []string{"DEEVNET_SITE_OCTET", "DEEVNET_VRF_VNI_BASE", "DEEVNET_VNET_VNI_BASE", "DEEVNET_TENANT_VMID_BASE"} {
 		n, err := strconv.Atoi(getenv(k))
 		if err != nil {
 			return wiring{}, fmt.Errorf("%s: %w", k, err)
@@ -167,6 +175,12 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		StateEndpoint:     getenv("DEEVNET_STATE_ENDPOINT"),
 		StateBucket:       getenv("DEEVNET_STATE_BUCKET"),
 		ResolverForwardTo: getenv("DEEVNET_RESOLVER_FORWARD_TO"),
+		TenantVMIDBase:    ints["DEEVNET_TENANT_VMID_BASE"],
+		MACNamespace:      getenv("DEEVNET_MAC_NAMESPACE"),
+		TemplatePrefix:    getenv("DEEVNET_TEMPLATE_PREFIX"),
+		Storage:           getenv("DEEVNET_TENANT_STORAGE"),
+		Disk:              getenv("DEEVNET_TENANT_DISK"),
+		CIUser:            getenv("DEEVNET_TENANT_CIUSER"),
 	}
 	if err := site.Validate(); err != nil {
 		return wiring{}, fmt.Errorf("site: %w", err)
@@ -193,12 +207,18 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		return wiring{}, fmt.Errorf("MINIO_ADMIN_ENDPOINT: %w", err)
 	}
 
+	// One Proxmox client reads the fabric and builds tenant networks and
+	// workloads (ADR-0015 §11, §12).
+	pve := proxmox.New(getenv("PROXMOX_API_URL"), creds["proxmox_token_id"], creds["proxmox_token_secret"], site, boolEnv(getenv, "PROXMOX_INSECURE_TLS", true))
+
 	svc := &tenant.Service{
 		Site:          site,
 		DNS:           powerdns.New(getenv("POWERDNS_API_URL"), creds["powerdns_api_key"]),
 		Resolver:      opnsense.New(getenv("OPNSENSE_API_URL"), creds["opnsense_api_key"], creds["opnsense_api_secret"], boolEnv(getenv, "OPNSENSE_INSECURE_TLS", true)),
 		State:         state,
-		Fabric:        proxmox.New(getenv("PROXMOX_API_URL"), creds["proxmox_token_id"], creds["proxmox_token_secret"], site, boolEnv(getenv, "PROXMOX_INSECURE_TLS", true)),
+		Fabric:        pve,
+		Network:       pve,
+		Compute:       pve,
 		Tokens:        tokens,
 		EnrollmentTTL: ttl,
 	}
@@ -207,7 +227,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	if enroller != nil {
 		svc.Enroller = enroller
 	}
-	return wiring{tenants: svc, sealer: sealer}, nil
+	return wiring{tenants: svc, sealer: sealer, site: site}, nil
 }
 
 func empty(getenv func(string) string, keys []string) []string {

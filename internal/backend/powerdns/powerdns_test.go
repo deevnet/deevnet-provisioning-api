@@ -216,3 +216,66 @@ func hasRRset(t *testing.T, c *Client, zoneName, name, typ string) bool {
 	}
 	return false
 }
+
+func TestRecordsArePublishedAndRemoved(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	tt := probeTenant()
+	_ = c.Remove(ctx, tt)
+	t.Cleanup(func() { _ = c.Remove(context.Background(), tt) })
+	if err := c.Ensure(ctx, tt); err != nil {
+		t.Fatal(err)
+	}
+
+	zone, reverse := "tprobe.mobile.deevnet.net", "190.20.10.in-addr.arpa"
+	recs := []tenant.DNSRecord{{Name: "web", Address: "10.20.190.10"}}
+	if err := c.EnsureRecords(ctx, zone, reverse, recs); err != nil {
+		t.Fatalf("ensure records: %v", err)
+	}
+	if err := c.EnsureRecords(ctx, zone, reverse, recs); err != nil {
+		t.Fatalf("ensure records again: %v", err)
+	}
+	if got := rrsetContent(t, c, zone, "web."+fqdn(zone), "A"); got != "10.20.190.10" {
+		t.Fatalf("A record = %q", got)
+	}
+	if got := rrsetContent(t, c, reverse, "10.190.20.10.in-addr.arpa.", "PTR"); got != "web."+fqdn(zone) {
+		t.Fatalf("PTR = %q", got)
+	}
+
+	// A tenant's own records, written over RFC 2136, are never touched.
+	apex := fqdn(zone)
+	own := rrset{Name: "self." + apex, Type: "A", TTL: 60, ChangeType: "REPLACE", Records: []record{{Content: "10.20.190.50"}}}
+	if err := c.do(ctx, http.MethodPatch, "/zones/"+url.PathEscape(apex), map[string]any{"rrsets": []rrset{own}}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.RemoveRecords(ctx, zone, reverse, recs); err != nil {
+		t.Fatalf("remove records: %v", err)
+	}
+	if err := c.RemoveRecords(ctx, zone, reverse, recs); err != nil {
+		t.Fatalf("remove records again: %v", err)
+	}
+	if got := rrsetContent(t, c, zone, "web."+fqdn(zone), "A"); got != "" {
+		t.Errorf("A record survived: %q", got)
+	}
+	if got := rrsetContent(t, c, reverse, "10.190.20.10.in-addr.arpa.", "PTR"); got != "" {
+		t.Errorf("PTR survived: %q", got)
+	}
+	if got := rrsetContent(t, c, zone, "self."+apex, "A"); got != "10.20.190.50" {
+		t.Errorf("the tenant's own record = %q, want it untouched", got)
+	}
+}
+
+func rrsetContent(t *testing.T, c *Client, zoneName, name, typ string) string {
+	t.Helper()
+	var z zone
+	if err := c.do(context.Background(), http.MethodGet, "/zones/"+url.PathEscape(fqdn(zoneName)), nil, &z); err != nil {
+		t.Fatal(err)
+	}
+	for _, rr := range z.RRsets {
+		if rr.Name == name && rr.Type == typ && len(rr.Records) > 0 {
+			return rr.Records[0].Content
+		}
+	}
+	return ""
+}

@@ -181,11 +181,15 @@ func TestTenantErrorMapping(t *testing.T) {
 		t.Errorf("second create: %d, want 409", rec.Code)
 	}
 
-	b.FabricClaims = []tenant.Claim{{Index: 1, Zone: "tdemo"}}
-	if rec, _ := call(t, h, http.MethodDelete, "/v1/tenants/tdemo", ""); rec.Code != http.StatusConflict {
-		t.Errorf("delete with the zone on the fabric: %d, want 409", rec.Code)
+	if rec, _ := call(t, h, http.MethodPost, "/v1/tenants/tdemo/workloads", `{"name":"web"}`); rec.Code != http.StatusCreated {
+		t.Errorf("create workload: %d, want 201", rec.Code)
 	}
-	b.FabricClaims = nil
+	if rec, _ := call(t, h, http.MethodDelete, "/v1/tenants/tdemo", ""); rec.Code != http.StatusConflict {
+		t.Errorf("delete with a workload: %d, want 409", rec.Code)
+	}
+	if rec, _ := call(t, h, http.MethodDelete, "/v1/tenants/tdemo/workloads/web", ""); rec.Code != http.StatusNoContent {
+		t.Errorf("delete workload: %d, want 204", rec.Code)
+	}
 	if rec, _ := call(t, h, http.MethodDelete, "/v1/tenants/tdemo", ""); rec.Code != http.StatusNoContent {
 		t.Errorf("delete: %d, want 204", rec.Code)
 	}

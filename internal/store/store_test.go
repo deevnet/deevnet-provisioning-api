@@ -30,7 +30,7 @@ func testStore(t *testing.T) *Postgres {
 	}
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS audit_log, tenant_steps, tenants, schema_migrations`,
+		`DROP TABLE IF EXISTS audit_log, tenant_steps, tenant_workloads, tenant_records, tenants, schema_migrations CASCADE`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatal(err)
@@ -183,7 +183,7 @@ func TestServiceOverPostgres(t *testing.T) {
 	if first.Record.Index != 1 || second.Record.Index != 3 || second.Record.Status != tenant.StatusReady {
 		t.Fatalf("indexes %d and %d (%s), want 1 and 3 ready", first.Record.Index, second.Record.Index, second.Record.Status)
 	}
-	if len(second.Record.Steps) != 3 {
+	if len(second.Record.Steps) != 4 {
 		t.Fatalf("steps = %+v", second.Record.Steps)
 	}
 }

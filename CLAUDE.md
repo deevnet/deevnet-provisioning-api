@@ -45,8 +45,13 @@ make stage    # save the image under the Builder's artifact root (needs a clean,
   registry's hash revokes. Don't replace them with random opaque tokens.
 - **Allocation reads the fabric.** An index is free only if no registry row holds it and no SDN
   zone or VNet carries its numbers. Don't shortcut to the database alone.
-- **The Proxmox backend only reads.** The API never writes to a hypervisor; egress is pulled by
-  the exit node (ADR-0015 §7).
+- **A workload's identity is derived, never allocated by hand** (ADR-0015 §12): ordinal from the
+  store, then VMID, MAC and address from it. Re-applying a workload keeps all four.
+- **SDN apply is cluster-wide**, so the service holds one lock across tenants while it applies.
+- **Proxmox answers 500, not 404, for an absent SDN object.** The client reads "does not exist" in
+  a 500 body as not-found; don't "fix" that by trusting the status alone.
+- **Egress stays pulled by the exit node** (ADR-0015 §7): the API writes SDN and VMs through the
+  PVE API, never files on a hypervisor.
 - **Configuration is environment only.** The container has no config file, and secrets arrive
   through a root-only env file written by the `deevnet_api` Ansible role.
 - **Never put secrets or connection errors in a response body.** Readiness logs the reason and

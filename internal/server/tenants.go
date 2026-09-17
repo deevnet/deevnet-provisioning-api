@@ -21,6 +21,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	mux.HandleFunc("DELETE /v1/tenants/{name}", h.ownTenant(h.delete))
 	mux.HandleFunc("POST /v1/tenants/{name}/reconcile", operatorOnly(h.reconcile))
 	mux.HandleFunc("GET /v1/fabric/egress", operatorOnly(h.egress))
+	workloadRoutes(mux, h)
 }
 
 // ownTenant admits the operator, and a registered tenant for its own name. A
@@ -296,6 +297,10 @@ func (h *tenantHandlers) fail(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "no free tenant index"})
 	case errors.Is(err, tenant.ErrNoEnrollment):
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "enrollment is not configured on this API"})
+	case errors.Is(err, tenant.ErrHasWorkloads):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the tenant still has workloads; destroy them first"})
+	case errors.Is(err, tenant.ErrWorkloadsExhausted):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no free workload ordinal"})
 	case errors.Is(err, tenant.ErrFabricInUse):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "the fabric still carries this tenant's zone; destroy the tenant's resources first"})
 	case errors.As(err, &inv):

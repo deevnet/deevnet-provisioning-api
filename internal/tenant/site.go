@@ -10,6 +10,7 @@ package tenant
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // ADR-0002: the overlay block is a /18, so one site holds 63 tenant indexes.
@@ -19,7 +20,10 @@ const (
 	MaxAllocatable = 62
 	ReservedIndex  = 63
 
-	vnetsPerTenant  = 10
+	vnetsPerTenant = 10
+	// Workload ordinals per tenant. Addresses run from .10, and VMIDs from the
+	// site's tenant base, both by ordinal.
+	MaxWorkloads    = 40
 	tsigAlgorithm   = "hmac-sha256"
 	statePrefixRoot = "tenants"
 	egressVRFPrefix = "vrf_"
@@ -28,6 +32,14 @@ const (
 // The PVE SDN zone ID is the tenant name verbatim, and PVE caps zone IDs at 8
 // characters. The tenant module validates the same pattern.
 var nameRE = regexp.MustCompile(`^[a-z][a-z0-9]{0,7}$`)
+
+// A workload or record name is a DNS label under the tenant's zone.
+var workloadNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,19}$`)
+
+// ValidWorkloadName reports whether name can be a workload or a published name.
+func ValidWorkloadName(name string) bool {
+	return workloadNameRE.MatchString(name) && !strings.HasSuffix(name, "-")
+}
 
 // ValidName reports whether name can be a tenant: a PVE SDN zone ID, which is
 // also a DNS label, a MinIO user and a VRF suffix.
@@ -65,6 +77,21 @@ type Site struct {
 	// Where the core router's resolver forwards tenant zones: the address of
 	// the tenant DNS server.
 	ResolverForwardTo string
+
+	// --- Workloads (ADR-0015 §12) ---
+	// First VMID of the site's tenant band. A workload's VMID is
+	// TenantVMIDBase + index*MaxWorkloads + ordinal, so it is stable across
+	// rebuilds and never collides with the management band.
+	TenantVMIDBase int
+	// 02:de:<octet> - the MAC derives from the VMID (standards/mac-naming).
+	MACNamespace string
+	// Template name prefix, datastore and the disk grown when a workload asks
+	// for more than the template's size.
+	TemplatePrefix string
+	Storage        string
+	Disk           string
+	// The account cloud-init creates for the tenant's keys.
+	CIUser string
 }
 
 // Validate refuses a site the API could only half serve.
@@ -88,6 +115,14 @@ func (s Site) Validate() error {
 		return fmt.Errorf("state endpoint and bucket are required")
 	case s.ResolverForwardTo == "":
 		return fmt.Errorf("resolver forward target is required")
+	case s.TenantVMIDBase <= 0:
+		return fmt.Errorf("tenant VMID base must be positive")
+	case s.MACNamespace == "":
+		return fmt.Errorf("MAC namespace is required")
+	case s.TemplatePrefix == "":
+		return fmt.Errorf("template prefix is required")
+	case s.Disk == "":
+		return fmt.Errorf("the disk to grow is required")
 	}
 	return nil
 }
@@ -145,4 +180,41 @@ func (s Site) IndexForVNetTag(tag int) int {
 
 func (s Site) statePrefix(name string) string {
 	return fmt.Sprintf("%s/%s/", statePrefixRoot, name)
+}
+
+// Network is the fabric objects for one tenant. VNet ids follow the tenant
+// module's rule: the first six characters of the name, then the VNet's number.
+func (s Site) Network(name string, index int) NetworkSpec {
+	n := s.Numbering(index)
+	short := name
+	if len(short) > 6 {
+		short = short[:6]
+	}
+	return NetworkSpec{
+		Zone:       name,
+		Controller: s.ControllerID,
+		Node:       s.Node,
+		VRFVNI:     n.VRFVNI,
+		VNets:      []VNetSpec{{ID: fmt.Sprintf("%s%d", short, 0), Tag: n.VNetVNIBase}},
+		Subnet:     n.Subnet,
+		Gateway:    n.Gateway,
+	}
+}
+
+// WorkloadVMID is the VMID of a tenant's workload: stable, and derived rather
+// than allocated.
+func (s Site) WorkloadVMID(index, ordinal int) int {
+	return s.TenantVMIDBase + index*MaxWorkloads + ordinal
+}
+
+// WorkloadAddress is the workload's address: .10 upwards, leaving .1 for the
+// anycast gateway and .2-.9 for the fabric.
+func (s Site) WorkloadAddress(index, ordinal int) string {
+	return fmt.Sprintf("10.%d.%d.%d", s.Octet, 128+index, 10+ordinal)
+}
+
+// MAC derives a VMID's MAC (standards/mac-naming §5):
+// 02:de:<site octet>:(vmid >> 16):(vmid >> 8 & 0xff):(vmid & 0xff).
+func (s Site) MAC(vmid int) string {
+	return fmt.Sprintf("%s:%02x:%02x:%02x", s.MACNamespace, (vmid>>16)&0xff, (vmid>>8)&0xff, vmid&0xff)
 }

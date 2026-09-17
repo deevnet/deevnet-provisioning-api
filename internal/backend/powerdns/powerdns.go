@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -297,4 +298,72 @@ func snippet(raw []byte) string {
 		s = s[:200] + "..."
 	}
 	return s
+}
+
+// --- Records (ADR-0015 §13) --------------------------------------------------
+//
+// The API publishes a workload's own name and the names a tenant adds beside
+// them. It touches only those names: everything else in the zone is the
+// tenant's, written over RFC 2136 with its own key.
+
+const recordTTL = 300
+
+// EnsureRecords writes an A record in the tenant's zone and the matching PTR in
+// its reverse zone.
+func (c *Client) EnsureRecords(ctx context.Context, zone, reverseZone string, recs []tenant.DNSRecord) error {
+	return c.records(ctx, zone, reverseZone, recs, "REPLACE")
+}
+
+// RemoveRecords deletes those names. An absent name is not an error: PowerDNS
+// accepts a DELETE for an rrset that is not there.
+func (c *Client) RemoveRecords(ctx context.Context, zone, reverseZone string, recs []tenant.DNSRecord) error {
+	return c.records(ctx, zone, reverseZone, recs, "DELETE")
+}
+
+func (c *Client) records(ctx context.Context, zone, reverseZone string, recs []tenant.DNSRecord, change string) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	var forward, reverse []rrset
+	for _, r := range recs {
+		fqName := r.Name + "." + fqdn(zone)
+		forward = append(forward, rrset{
+			Name: fqName, Type: "A", TTL: recordTTL, ChangeType: change,
+			Records: records(change, r.Address),
+		})
+		ptr, err := ptrName(r.Address)
+		if err != nil {
+			return err
+		}
+		reverse = append(reverse, rrset{
+			Name: ptr, Type: "PTR", TTL: recordTTL, ChangeType: change,
+			Records: records(change, fqName),
+		})
+	}
+	if err := c.do(ctx, http.MethodPatch, "/zones/"+url.PathEscape(fqdn(zone)), map[string]any{"rrsets": forward}, nil); err != nil {
+		return fmt.Errorf("zone %s: %w", zone, err)
+	}
+	if err := c.do(ctx, http.MethodPatch, "/zones/"+url.PathEscape(fqdn(reverseZone)), map[string]any{"rrsets": reverse}, nil); err != nil {
+		return fmt.Errorf("zone %s: %w", reverseZone, err)
+	}
+	return nil
+}
+
+// A DELETE carries no records; a REPLACE carries the one content.
+func records(change, content string) []record {
+	if change == "DELETE" {
+		return []record{}
+	}
+	return []record{{Content: content}}
+}
+
+// ptrName is the reverse name of an IPv4 address: 10.20.129.10 becomes
+// 10.129.20.10.in-addr.arpa.
+func ptrName(address string) (string, error) {
+	ip := net.ParseIP(address)
+	if ip == nil || ip.To4() == nil {
+		return "", fmt.Errorf("%q is not an IPv4 address", address)
+	}
+	o := strings.Split(ip.To4().String(), ".")
+	return fmt.Sprintf("%s.%s.%s.%s.in-addr.arpa.", o[3], o[2], o[1], o[0]), nil
 }
