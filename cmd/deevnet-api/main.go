@@ -3,6 +3,7 @@
 // Configuration is environment only, so the container carries no config file:
 //
 //	DEEVNET_API_TOKEN   operator bearer token for /v1 (required; the API refuses to start without it)
+//	DEEVNET_AGENT_TOKEN token for the exit node's egress agent: the VRF list only
 //	DATABASE_URL        PostgreSQL connection string (required)
 //	DEEVNET_API_LISTEN  listen address (default ":8080")
 //	DEEVNET_API_TLS_CERT, DEEVNET_API_TLS_KEY
@@ -118,11 +119,12 @@ func run(logger *slog.Logger) error {
 	srv := &http.Server{
 		Addr: addr,
 		Handler: server.New(server.Config{
-			Token:    token,
-			DB:       pool,
-			Logger:   logger,
-			Tenants:  tenants,
-			Migrated: migrated.Load,
+			Token:      token,
+			AgentToken: os.Getenv("DEEVNET_AGENT_TOKEN"),
+			DB:         pool,
+			Logger:     logger,
+			Tenants:    tenants,
+			Migrated:   migrated.Load,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

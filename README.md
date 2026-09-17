@@ -35,7 +35,7 @@ The IoT resources of ADR-0012 arrive later; their routes still answer `501`. The
 | `POST /v1/tenants/{name}/workloads` | operator or the tenant | build a VM in the tenant's network |
 | `GET`, `DELETE` `/v1/tenants/{name}/workloads[/{workload}]` | operator or the tenant | list, read, remove |
 | `PUT`, `GET`, `DELETE` `/v1/tenants/{name}/records[/{record}]` | operator or the tenant | names beside the workloads' own |
-| `GET /v1/fabric/egress` | operator | the VRFs the exit node routes |
+| `GET /v1/fabric/egress` | operator or the egress agent | the VRFs the exit node routes |
 | any other `/v1/*` | operator or a tenant | `401` without a valid token; `501` with one |
 
 ## Configuration
@@ -45,6 +45,7 @@ Environment only.
 | Variable | Required | Meaning |
 |---|---|---|
 | `DEEVNET_API_TOKEN` | yes | The operator bearer token for `/v1`. The API refuses to start without one. |
+| `DEEVNET_AGENT_TOKEN` | no | The exit node's egress agent. It reads `GET /v1/fabric/egress` and nothing else. |
 | `DATABASE_URL` | yes | PostgreSQL connection string. The schema is migrated on start. |
 | `DEEVNET_API_LISTEN` | no | Listen address, default `:8080` |
 

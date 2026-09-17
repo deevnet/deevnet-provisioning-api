@@ -11,6 +11,9 @@ import (
 // principal is who a /v1 request speaks for.
 type principal struct {
 	operator bool
+	// agent is the exit node's egress agent: it reads the VRF list and
+	// nothing else (ADR-0015 §7).
+	agent bool
 	// tenant is set when the token is a tenant token the API issued. registered
 	// is false for a tenant restoring itself after the registry was lost.
 	tenant     string
@@ -40,13 +43,15 @@ func requireToken(next http.Handler) http.Handler {
 }
 
 // identify resolves the token to a principal.
-func identify(operatorToken string, tenants *tenant.Service, next http.Handler) http.Handler {
+func identify(operatorToken, agentToken string, tenants *tenant.Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, _ := auth.Token(r)
 		var p principal
 		switch {
 		case auth.Equal(tok, operatorToken):
 			p.operator = true
+		case auth.Equal(tok, agentToken):
+			p.agent = true
 		case tenants != nil:
 			if c, ok := tenants.Authenticate(r.Context(), tok); ok {
 				p.tenant, p.registered = c.Tenant, c.Registered
@@ -67,6 +72,21 @@ func operatorOnly(next http.HandlerFunc) http.HandlerFunc {
 		p := principalFrom(r.Context())
 		switch {
 		case p.operator:
+			next(w, r)
+		case p.tenant != "":
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "operator only"})
+		default:
+			auth.Deny(w)
+		}
+	}
+}
+
+// egressReader admits the operator and the egress agent.
+func egressReader(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := principalFrom(r.Context())
+		switch {
+		case p.operator || p.agent:
 			next(w, r)
 		case p.tenant != "":
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "operator only"})

@@ -24,9 +24,12 @@ type Pinger interface {
 }
 
 type Config struct {
-	Token  string
-	DB     Pinger
-	Logger *slog.Logger
+	Token string
+	// AgentToken is the exit node's egress agent (ADR-0015 §7). Empty means no
+	// agent, and the egress list is operator-only.
+	AgentToken string
+	DB         Pinger
+	Logger     *slog.Logger
 	// Tenants serves the tenant routes. Nil leaves them answering 501, which is
 	// how the API runs until its site and backends are configured.
 	Tenants *tenant.Service
@@ -56,7 +59,7 @@ func New(cfg Config) http.Handler {
 		tenantRoutes(v1, cfg.Tenants, cfg.Logger)
 	}
 	v1.HandleFunc("/v1/", knownCaller(notImplemented))
-	mux.Handle("/v1/", requireToken(requireMigrated(cfg.Migrated, identify(cfg.Token, cfg.Tenants, v1))))
+	mux.Handle("/v1/", requireToken(requireMigrated(cfg.Migrated, identify(cfg.Token, cfg.AgentToken, cfg.Tenants, v1))))
 
 	return logRequests(cfg.Logger, mux)
 }
