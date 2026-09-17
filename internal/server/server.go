@@ -1,8 +1,9 @@
 // Package server is the API's HTTP surface.
 //
-// This is the shell ADR-0012's API grows into. It answers health, readiness and
-// version, and puts every /v1 route behind the token check, where each one says
-// it is not implemented yet.
+// It answers health, readiness and version unauthenticated, and puts every /v1
+// route behind the operator token. The tenant routes (ADR-0015) are served when
+// a tenant service is configured; every other /v1 route says it is not
+// implemented yet.
 package server
 
 import (
@@ -12,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/deevnet/deevnet-provisioning-api/internal/auth"
+	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 	"github.com/deevnet/deevnet-provisioning-api/internal/version"
 )
 
@@ -26,6 +27,12 @@ type Config struct {
 	Token  string
 	DB     Pinger
 	Logger *slog.Logger
+	// Tenants serves the tenant routes. Nil leaves them answering 501, which is
+	// how the API runs until its site and backends are configured.
+	Tenants *tenant.Service
+	// Migrated reports whether the database schema is in place. Nil means it
+	// is, which is what tests that never touch a database want.
+	Migrated func() bool
 }
 
 func New(cfg Config) http.Handler {
@@ -35,9 +42,21 @@ func New(cfg Config) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
-	mux.HandleFunc("GET /readyz", readyz(cfg.DB, cfg.Logger))
+	if cfg.Migrated == nil {
+		cfg.Migrated = func() bool { return true }
+	}
+	mux.HandleFunc("GET /readyz", readyz(cfg.DB, cfg.Migrated, cfg.Logger))
 	mux.HandleFunc("GET /version", versionInfo)
-	mux.Handle("/v1/", auth.Bearer(cfg.Token, http.HandlerFunc(notImplemented)))
+
+	if cfg.Token == "" {
+		panic("server: empty operator token")
+	}
+	v1 := http.NewServeMux()
+	if cfg.Tenants != nil {
+		tenantRoutes(v1, cfg.Tenants, cfg.Logger)
+	}
+	v1.HandleFunc("/v1/", knownCaller(notImplemented))
+	mux.Handle("/v1/", requireToken(requireMigrated(cfg.Migrated, identify(cfg.Token, cfg.Tenants, v1))))
 
 	return logRequests(cfg.Logger, mux)
 }
@@ -48,9 +67,9 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyz reports whether the API can do work, which today means its database
-// answers.
-func readyz(db Pinger, logger *slog.Logger) http.HandlerFunc {
+// readyz reports whether the API can do work: its database answers and its
+// schema is in place.
+func readyz(db Pinger, migrated func() bool, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -65,8 +84,25 @@ func readyz(db Pinger, logger *slog.Logger) http.HandlerFunc {
 			})
 			return
 		}
+		if !migrated() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status":   "unavailable",
+				"database": "migrating",
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "database": "ok"})
 	}
+}
+
+func requireMigrated(migrated func() bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !migrated() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "database not migrated yet"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func versionInfo(w http.ResponseWriter, _ *http.Request) {
