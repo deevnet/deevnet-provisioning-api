@@ -292,6 +292,18 @@ func TestTenantRestoresItselfAfterTheRegistryIsLost(t *testing.T) {
 
 	// A fresh API: same token key, empty registry.
 	h2, _, _ := tenantServer(t)
+
+	// What the provider does first. The token verifies by its MAC without the
+	// registry, and the tenant is not there, so this is 404 - the answer the
+	// provider restores from. A 401 would leave the tenant unable to put itself
+	// back, which is the point of a token that outlives the database.
+	if rec, _ := callAs(t, h2, tok, http.MethodGet, "/v1/tenants/tdemo", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("reading its own tenant before restoring: %d, want 404", rec.Code)
+	}
+	if rec, _ := callAs(t, h2, tok, http.MethodGet, "/v1/tenants/tdemo/workloads", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("its workloads before restoring: %d, want 404", rec.Code)
+	}
+
 	rec, out := callAs(t, h2, tok, http.MethodPost, "/v1/tenants", restore)
 	if rec.Code != http.StatusCreated || out["outcome"] != "restored" {
 		t.Fatalf("restore with its own token: %d %v", rec.Code, out)
