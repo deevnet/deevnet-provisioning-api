@@ -219,8 +219,12 @@ would rather publish itself (ADR-0004).
 
 ## Egress list
 
-`GET /v1/fabric/egress`, operator only, returns `{"vrfs": [{"tenant": "eds", "vrf": "vrf_eds"}]}` for every
-`ready` tenant. It is what the exit node's agent will read (ADR-0015 §7).
+`GET /v1/fabric/egress` returns `{"vrfs": [{"tenant": "eds", "vrf": "vrf_eds"}]}` for every `ready`
+tenant. The exit node's agent reads it and renders the VRF default routes (ADR-0015 §7).
+
+**Who may call it:** the operator, and the agent token in `DEEVNET_AGENT_TOKEN`. That token reads
+this one route and nothing else, so the exit node holds no operator credential. Without
+`DEEVNET_AGENT_TOKEN` set, the route is operator-only.
 
 ## At rest and in transit
 

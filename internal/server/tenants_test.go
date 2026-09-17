@@ -316,3 +316,33 @@ func TestAdmissionsWithoutEnrollment(t *testing.T) {
 		t.Fatalf("unknown token without enrollment: %d, want 401", rec.Code)
 	}
 }
+
+func TestTheEgressAgentReadsOnlyTheVRFList(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	svc.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := New(Config{Token: "s3cret", AgentToken: "agent-token", DB: fakeDB{}, Logger: svc.Logger, Tenants: svc})
+
+	call(t, h, http.MethodPost, "/v1/tenants", `{"name":"eds"}`)
+
+	rec, out := callAs(t, h, "agent-token", http.MethodGet, "/v1/fabric/egress", "")
+	vrfs, _ := out["vrfs"].([]any)
+	if rec.Code != http.StatusOK || len(vrfs) != 1 {
+		t.Fatalf("agent reads the list: %d %v", rec.Code, out)
+	}
+	for _, r := range []struct{ method, path, body string }{
+		{http.MethodGet, "/v1/tenants", ""},
+		{http.MethodGet, "/v1/tenants/eds", ""},
+		{http.MethodPost, "/v1/tenants", `{"name":"other"}`},
+		{http.MethodPost, "/v1/admissions", `{"name":"other"}`},
+	} {
+		if rec, _ := callAs(t, h, "agent-token", r.method, r.path, r.body); rec.Code != http.StatusUnauthorized {
+			t.Errorf("agent %s %s: %d, want 401", r.method, r.path, rec.Code)
+		}
+	}
+
+	// Without an agent token configured, the same token is just unknown.
+	h2, _, _ := tenantServer(t)
+	if rec, _ := callAs(t, h2, "agent-token", http.MethodGet, "/v1/fabric/egress", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no agent configured: %d, want 401", rec.Code)
+	}
+}

@@ -20,7 +20,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	mux.HandleFunc("GET /v1/tenants/{name}", h.ownTenant(h.get))
 	mux.HandleFunc("DELETE /v1/tenants/{name}", h.ownTenant(h.delete))
 	mux.HandleFunc("POST /v1/tenants/{name}/reconcile", operatorOnly(h.reconcile))
-	mux.HandleFunc("GET /v1/fabric/egress", operatorOnly(h.egress))
+	mux.HandleFunc("GET /v1/fabric/egress", egressReader(h.egress))
 	workloadRoutes(mux, h)
 }
 
