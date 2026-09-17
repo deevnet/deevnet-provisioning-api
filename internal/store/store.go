@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +41,7 @@ type Sealer interface {
 type Postgres struct {
 	pool   *pgxpool.Pool
 	sealer Sealer
+	logger *slog.Logger
 	// site derives a workload's VMID, MAC and address from its ordinal, which
 	// the store allocates (ADR-0015 §12).
 	site tenant.Site
@@ -59,6 +62,19 @@ func (p *Postgres) WithSealer(s Sealer) *Postgres {
 	return p
 }
 
+// WithLogger is where an unreadable stored secret is reported.
+func (p *Postgres) WithLogger(l *slog.Logger) *Postgres {
+	p.logger = l
+	return p
+}
+
+func (p *Postgres) log() *slog.Logger {
+	if p.logger == nil {
+		return slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return p.logger
+}
+
 func (p *Postgres) seal(ctx context.Context, s tenant.Secrets) (tenant.Secrets, error) {
 	if p.sealer == nil {
 		return s, nil
@@ -71,16 +87,29 @@ func (p *Postgres) seal(ctx context.Context, s tenant.Secrets) (tenant.Secrets, 
 	return s, err
 }
 
+// A stored secret that will not open loses the secret, not the tenant. That is
+// what a rebuilt Transit key looks like (ADR-0016 §6): the ciphertext in these
+// columns was written under a key that no longer exists. The record is still
+// good, the tenant's own state holds the authoritative copies, and a supplied
+// secret wins over a stored one (ADR-0015 §4) - so reading it back as empty is
+// what lets the tenant put itself right. Failing the read instead made the
+// tenant unable even to authenticate, which closed the documented way back.
 func (p *Postgres) open(ctx context.Context, s tenant.Secrets) (tenant.Secrets, error) {
 	if p.sealer == nil {
 		return s, nil
 	}
-	var err error
-	if s.TSIG, err = p.sealer.Open(ctx, s.TSIG); err != nil {
-		return s, err
+	s.TSIG = p.openOne(ctx, s.TSIG, "tsig")
+	s.State = p.openOne(ctx, s.State, "state")
+	return s, nil
+}
+
+func (p *Postgres) openOne(ctx context.Context, stored, what string) string {
+	out, err := p.sealer.Open(ctx, stored)
+	if err != nil {
+		p.log().Error("stored secret will not open; it must be supplied again", "secret", what, "err", err)
+		return ""
 	}
-	s.State, err = p.sealer.Open(ctx, s.State)
-	return s, err
+	return out
 }
 
 // Migrate applies every embedded migration not yet recorded, in order, each in
