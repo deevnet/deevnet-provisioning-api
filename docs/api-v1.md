@@ -60,7 +60,7 @@ A **restore** sends back what the tenant's state holds: the index and all three 
   "index": 2,
   "tsig_secret": "<base64, at least 16 bytes>",
   "state_secret": "<8-40 characters>",
-  "api_token": "<at least 32 characters>"
+  "api_token": "<the tenant token the API issued>"
 }
 ```
 
