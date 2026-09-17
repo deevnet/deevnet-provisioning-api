@@ -231,6 +231,12 @@ type Compute interface {
 type DNSRecord struct {
 	Name    string // label, e.g. "web" or "eds-1"
 	Address string
+	// Reverse is true for the name that owns the address: a workload's own.
+	// A name a tenant adds beside it is an alias for the service, and several
+	// may share one address, so only the workload publishes the PTR - otherwise
+	// whichever name was written last would claim the reverse and the machine
+	// would stop resolving back to itself.
+	Reverse bool
 }
 
 // Claim is an index the live fabric is using, and the zone using it.
