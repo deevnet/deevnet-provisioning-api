@@ -101,3 +101,22 @@ func TestMethodAndPathRouting(t *testing.T) {
 		t.Errorf("GET /nope: status = %d, want 404", rec.Code)
 	}
 }
+
+func TestNotMigratedIsNotReady(t *testing.T) {
+	h := New(Config{
+		Token:    "s3cret",
+		DB:       fakeDB{},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Migrated: func() bool { return false },
+	})
+	rec, body := do(t, h, http.MethodGet, "/readyz", "")
+	if rec.Code != http.StatusServiceUnavailable || body["database"] != "migrating" {
+		t.Fatalf("readyz: got %d %v, want 503 database=migrating", rec.Code, body)
+	}
+	if rec, _ := do(t, h, http.MethodGet, "/v1/tenants", "s3cret"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/v1 before migration: %d, want 503", rec.Code)
+	}
+	if rec, _ := do(t, h, http.MethodGet, "/v1/tenants", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/v1 without a token before migration: %d, want 401 first", rec.Code)
+	}
+}

@@ -1,10 +1,12 @@
-// Command deevnet-api serves the Deevnet API (ADR-0012).
+// Command deevnet-api serves the Deevnet API (ADR-0012, ADR-0015).
 //
 // Configuration is environment only, so the container carries no config file:
 //
-//	DEEVNET_API_TOKEN   bearer token for /v1 (required; the API refuses to start without it)
+//	DEEVNET_API_TOKEN   operator bearer token for /v1 (required; the API refuses to start without it)
 //	DATABASE_URL        PostgreSQL connection string (required)
 //	DEEVNET_API_LISTEN  listen address (default ":8080")
+//
+// Tenants are served when DEEVNET_SITE is set; config.go lists what that needs.
 package main
 
 import (
@@ -15,12 +17,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/server"
+	"github.com/deevnet/deevnet-provisioning-api/internal/store"
 	"github.com/deevnet/deevnet-provisioning-api/internal/version"
 )
 
@@ -61,9 +65,46 @@ func run(logger *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	tenants, err := tenantService(os.Getenv)
+	if err != nil {
+		return err
+	}
+	reg := store.New(pool)
+	if tenants != nil {
+		tenants.Store = reg
+		tenants.Logger = logger
+		logger.Info("serving tenants", "site", tenants.Site.Name)
+	}
+
+	// Migrations retry in the background for the same reason the pool dials
+	// lazily. Until they have run, readiness says so and /v1 answers 503.
+	var migrated atomic.Bool
+	go func() {
+		for {
+			err := reg.Migrate(ctx)
+			if err == nil {
+				migrated.Store(true)
+				logger.Info("database migrated")
+				return
+			}
+			logger.Warn("migrating database", "err", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+		}
+	}()
+
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           server.New(server.Config{Token: token, DB: pool, Logger: logger}),
+		Addr: addr,
+		Handler: server.New(server.Config{
+			Token:    token,
+			DB:       pool,
+			Logger:   logger,
+			Tenants:  tenants,
+			Migrated: migrated.Load,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
