@@ -32,8 +32,17 @@ func (h *tenantHandlers) ownTenant(next http.HandlerFunc) http.HandlerFunc {
 		switch {
 		case p.operator:
 			next(w, r)
-		case p.tenant != "" && p.registered:
-			if p.tenant != r.PathValue("name") {
+		case p.tenant != "":
+			// Another tenant's name is 404 rather than 403, so a token cannot be
+			// used to discover which tenants exist.
+			//
+			// So is the tenant's own name when it is unregistered: the token
+			// verifies by its MAC without the registry (ADR-0015 §5), and after
+			// a registry loss the tenant it names genuinely is not there. The
+			// provider reads that 404 and restores, which is the whole point of
+			// a token that outlives the database - a 401 here would leave a
+			// tenant unable to put itself back.
+			if p.tenant != r.PathValue("name") || !p.registered {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
 				return
 			}
