@@ -84,7 +84,28 @@ type Service struct {
 	sdn sync.Mutex
 }
 
-const operator = "operator"
+// The audit log says who did it. The caller is put in the context by the
+// server, because the service is reached the same way whoever is calling: a
+// log that named the operator for everything would attribute a tenant's own
+// workloads, names and restores to the operator.
+type actorKey struct{}
+
+// WithActor names the caller for anything audited under this context.
+func WithActor(ctx context.Context, actor string) context.Context {
+	if actor == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, actorKey{}, actor)
+}
+
+func actorFrom(ctx context.Context) string {
+	if a, ok := ctx.Value(actorKey{}).(string); ok && a != "" {
+		return a
+	}
+	// Nothing set it: a call that did not come through the server, such as a
+	// test or a future scheduled task. Not the operator.
+	return "unattributed"
+}
 
 // Create creates, restores or resumes a tenant.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Result, error) {
@@ -494,7 +515,11 @@ func (s *Service) PutRecord(ctx context.Context, tenantName, name, address strin
 		[]DNSRecord{{Name: name, Address: address}}); err != nil {
 		return &StepError{Step: StepDNS, Err: err}
 	}
-	return s.Store.PutRecord(ctx, ExtraRecord{Tenant: tenantName, Name: name, Address: address})
+	if err := s.Store.PutRecord(ctx, ExtraRecord{Tenant: tenantName, Name: name, Address: address}); err != nil {
+		return err
+	}
+	s.audit(ctx, "record-put", tenantName, map[string]any{"record": name, "address": address})
+	return nil
 }
 
 // ListRecords returns the names a tenant added beside its workloads'.
@@ -520,7 +545,11 @@ func (s *Service) DeleteRecord(ctx context.Context, tenantName, name string) err
 			[]DNSRecord{{Name: r.Name, Address: r.Address}}); err != nil {
 			return &StepError{Step: StepDNS, Err: err}
 		}
-		return s.Store.DeleteRecord(ctx, tenantName, name)
+		if err := s.Store.DeleteRecord(ctx, tenantName, name); err != nil {
+			return err
+		}
+		s.audit(ctx, "record-delete", tenantName, map[string]any{"record": name})
+		return nil
 	}
 	return ErrNotFound
 }
@@ -611,7 +640,7 @@ func (s *Service) recordStep(ctx context.Context, name, step string, stepErr err
 }
 
 func (s *Service) audit(ctx context.Context, action, name string, detail map[string]any) {
-	if err := s.Store.Audit(ctx, AuditEntry{Actor: operator, Action: action, Tenant: name, Detail: detail}); err != nil {
+	if err := s.Store.Audit(ctx, AuditEntry{Actor: actorFrom(ctx), Action: action, Tenant: name, Detail: detail}); err != nil {
 		s.logger().Error("writing audit log", "tenant", name, "action", action, "err", err)
 	}
 }

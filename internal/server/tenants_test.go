@@ -316,6 +316,28 @@ func TestTenantRestoresItselfAfterTheRegistryIsLost(t *testing.T) {
 	}
 }
 
+// The audit log has to say who, not just what: it is the only record that a
+// tenant built its own workload rather than an operator doing it for them.
+func TestTheAuditLogNamesTheCaller(t *testing.T) {
+	h, store, _ := tenantServer(t)
+	_, first := call(t, h, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`)
+	tok := first["api_token"].(string)
+	if rec, _ := callAs(t, h, tok, http.MethodPut, "/v1/tenants/tdemo/records/service",
+		`{"address":"10.20.129.20"}`); rec.Code != http.StatusOK && rec.Code != http.StatusCreated {
+		t.Fatalf("publishing a name as the tenant: %d", rec.Code)
+	}
+	var byAction = map[string]string{}
+	for _, e := range store.AuditLog {
+		byAction[e.Action] = e.Actor
+	}
+	if got := byAction["create"]; got != "operator" {
+		t.Errorf("create by the operator token is actor %q", got)
+	}
+	if got := byAction["record-put"]; got != "tenant:tdemo" {
+		t.Errorf("a name the tenant published is actor %q, want tenant:tdemo", got)
+	}
+}
+
 func TestAdmissionsWithoutEnrollment(t *testing.T) {
 	svc, _, _ := tenanttest.NewService()
 	svc.Enroller = nil

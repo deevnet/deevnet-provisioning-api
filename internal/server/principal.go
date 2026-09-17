@@ -25,6 +25,23 @@ type principal struct {
 
 type principalKey struct{}
 
+// actor is what the audit log records for this caller.
+func (p principal) actor() string {
+	switch {
+	case p.operator:
+		return "operator"
+	case p.agent:
+		return "egress-agent"
+	case p.tenant != "":
+		return "tenant:" + p.tenant
+	default:
+		// An enrollment token, which can only create the tenant it was issued
+		// for. Naming the tenant would claim more than is known: the token is
+		// checked against the requested name inside that call.
+		return "enrollment"
+	}
+}
+
 func principalFrom(ctx context.Context) principal {
 	p, _ := ctx.Value(principalKey{}).(principal)
 	return p
@@ -61,7 +78,8 @@ func identify(operatorToken, agentToken string, tenants *tenant.Service, next ht
 		default:
 			p.presented = tok
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+		ctx := context.WithValue(r.Context(), principalKey{}, p)
+		next.ServeHTTP(w, r.WithContext(tenant.WithActor(ctx, p.actor())))
 	})
 }
 
