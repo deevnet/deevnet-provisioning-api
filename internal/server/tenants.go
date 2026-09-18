@@ -22,6 +22,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	mux.HandleFunc("POST /v1/tenants/{name}/reconcile", operatorOnly(h.reconcile))
 	mux.HandleFunc("GET /v1/fabric/egress", egressReader(h.egress))
 	workloadRoutes(mux, h)
+	wifiKeyRoutes(mux, h)
 }
 
 // ownTenant admits the operator, and a registered tenant for its own name. A

@@ -79,6 +79,10 @@ KV v2 secret.
 - **Fields:** `powerdns_api_key`, `opnsense_api_key`, `opnsense_api_secret`,
   `minio_admin_access_key`, `minio_admin_secret_key`, `proxmox_token_id`, `proxmox_token_secret`,
   and `token_hmac_key` (base64, at least 32 bytes, the MAC key of tenant tokens).
+- **`omada_client_id` and `omada_client_secret`** are needed only when `OMADA_API_URL` is set, and
+  are checked only then. They are the API's **own** Open API client, separate from the one Ansible
+  uses: the permission is identical, but the blast radius, the rotation and the controller's audit
+  log are not.
 - **OpenBao also provides** envelope encryption of stored secrets and enrollment tokens.
 - **Without OpenBao** (tests and local runs), the same names are read from the environment in upper
   case. There is then no enrollment and no encryption at rest.
@@ -94,6 +98,22 @@ KV v2 secret.
 | `DEEVNET_API_TLS_CERT`, `DEEVNET_API_TLS_KEY` | | serve TLS; set both or neither |
 | `OPNSENSE_INSECURE_TLS`, `PROXMOX_INSECURE_TLS` | `true` | self-signed certificates on those devices |
 | `MINIO_ADMIN_TLS` | `false` | |
+
+**Wi-Fi keys are optional** (ADR-0012 §3). `OMADA_API_URL` turns them on; leave it unset and the API
+issues none and the `wifi-keys` routes refuse with a reason. That is not a degraded state: a site
+with no wireless controller is a legitimate site, which is why these are not in the required lists
+above — adding them there would take a running API down on the first image bump, before its vault
+had the values.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OMADA_API_URL` | | e.g. `https://10.20.99.40:8043`; turns Wi-Fi keys on |
+| `DEEVNET_IOT_TRUST_CLASSES` | | `iot=DVNTM-IOT:30`, comma-separated `name=ssid:vlan` |
+| `OMADA_INSECURE_TLS` | `true` | the controller's self-signed certificate |
+
+`DEEVNET_IOT_TRUST_CLASSES` is **projected from inventory**, not decided here: `deevnet_vlans` in
+`ansible-inventory-deevnet` remains the only declaration of a segment's SSID and VLAN (ADR-0009),
+and the `deevnet_api` role renders this from it, the same way it renders the fabric controller.
 
 ## Build and stage
 

@@ -73,6 +73,9 @@ type Service struct {
 	// §11, §12).
 	Network Network
 	Compute Compute
+	// Wireless issues tenant Wi-Fi keys (ADR-0012 §3). Nil at a site with no
+	// wireless controller, where the Wi-Fi endpoints refuse rather than panic.
+	Wireless Wireless
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.
@@ -313,11 +316,29 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	}
 	s.audit(ctx, "delete", name, map[string]any{"index": rec.Index})
 
+	// A tenant's Wi-Fi keys go with it. They are credentials rather than
+	// resources, so unlike workloads they do not block the delete - but they do
+	// have to be revoked, because the registry row is about to disappear and a
+	// key left in the controller's profile would then belong to nobody and
+	// still let a device onto the IoT segment.
+	wifiKeys, err := s.Store.ListWiFiKeys(ctx, name)
+	if err != nil {
+		return err
+	}
+
 	// Reverse of create: stop resolving the zones before they disappear.
 	steps := []struct {
 		name string
 		run  func() error
 	}{
+		{StepWiFiKey, func() error {
+			for _, k := range wifiKeys {
+				if err := s.removeKeyFromController(ctx, k); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
 		{StepNetwork, func() error { return s.removeNetwork(ctx, rec) }},
 		{StepResolver, func() error { return s.Resolver.Remove(ctx, s.zones(rec)) }},
 		{StepDNS, func() error { return s.DNS.Remove(ctx, s.dnsTenant(rec)) }},

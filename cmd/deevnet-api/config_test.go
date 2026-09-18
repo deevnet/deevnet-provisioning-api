@@ -103,3 +103,93 @@ func TestOpenBaoHalfConfigured(t *testing.T) {
 		t.Fatalf("err = %v, want the missing OpenBao settings named", err)
 	}
 }
+
+// The deployed API has no wireless controller until CHG-0013 ships its
+// credential. If OMADA_API_URL being absent were a startup failure, bumping the
+// image would take the running API down before the vault had the values - so
+// this is the test that says it does not.
+func TestNoOmadaStillStarts(t *testing.T) {
+	w, err := tenantService(context.Background(), env(fullEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Wireless != nil {
+		t.Error("no OMADA_API_URL should mean no wireless backend")
+	}
+	if len(w.tenants.Site.TrustClasses) != 0 {
+		t.Error("no trust classes should be served")
+	}
+}
+
+func TestOmadaWiredWhenConfigured(t *testing.T) {
+	e := fullEnv()
+	e["OMADA_API_URL"] = "https://10.20.99.40:8043"
+	e["DEEVNET_IOT_TRUST_CLASSES"] = "iot=DVNTM-IOT:30"
+	e["OMADA_CLIENT_ID"] = "id"
+	e["OMADA_CLIENT_SECRET"] = "secret"
+	w, err := tenantService(context.Background(), env(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Wireless == nil {
+		t.Fatal("wireless backend not wired")
+	}
+	tc, ok := w.tenants.Site.TrustClass("iot")
+	if !ok || tc.SSID != "DVNTM-IOT" || tc.VLAN != 30 {
+		t.Errorf("trust class = %+v, %v", tc, ok)
+	}
+}
+
+func TestOmadaHalfConfigured(t *testing.T) {
+	for _, tc := range []struct {
+		name, drop, want string
+	}{
+		{"no trust classes", "DEEVNET_IOT_TRUST_CLASSES", "DEEVNET_IOT_TRUST_CLASSES"},
+		{"no client id", "OMADA_CLIENT_ID", "omada_client_id"},
+		{"no client secret", "OMADA_CLIENT_SECRET", "omada_client_secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := fullEnv()
+			e["OMADA_API_URL"] = "https://10.20.99.40:8043"
+			e["DEEVNET_IOT_TRUST_CLASSES"] = "iot=DVNTM-IOT:30"
+			e["OMADA_CLIENT_ID"] = "id"
+			e["OMADA_CLIENT_SECRET"] = "secret"
+			delete(e, tc.drop)
+			_, err := tenantService(context.Background(), env(e))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to name %s", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "secret\"") {
+				t.Error("the error must name variables, not print values")
+			}
+		})
+	}
+}
+
+func TestParseTrustClasses(t *testing.T) {
+	ok, err := parseTrustClasses("iot=DVNTM-IOT:30, iot_vendor=DVNTM-IOTV:31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ok) != 2 || ok["iot"].VLAN != 30 || ok["iot_vendor"].SSID != "DVNTM-IOTV" {
+		t.Fatalf("parsed = %+v", ok)
+	}
+	for _, bad := range []string{"", "iot", "iot=DVNTM-IOT", "iot=DVNTM-IOT:notanumber", "iot=A:30,iot=B:31"} {
+		if _, err := parseTrustClasses(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}
+
+// A VLAN outside 1-4094 cannot be bound to a key, so it is refused at startup
+// rather than at the first tenant's apply.
+func TestTrustClassVLANValidated(t *testing.T) {
+	e := fullEnv()
+	e["OMADA_API_URL"] = "https://10.20.99.40:8043"
+	e["DEEVNET_IOT_TRUST_CLASSES"] = "iot=DVNTM-IOT:9999"
+	e["OMADA_CLIENT_ID"] = "id"
+	e["OMADA_CLIENT_SECRET"] = "secret"
+	if _, err := tenantService(context.Background(), env(e)); err == nil || !strings.Contains(err.Error(), "9999") {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -217,6 +217,49 @@ Names beside the workloads' own (ADR-0015 §13), such as eds's `palette` and `li
 The address must be in the tenant's own subnet. The tenant's TSIG key still works for anything it
 would rather publish itself (ADR-0004).
 
+## Wi-Fi keys
+
+A tenant's PPSK key for one IoT trust class (ADR-0012 §3). One key serves every device the tenant
+flashes with it; the substrate does not know those devices individually.
+
+`POST /v1/tenants/{name}/wifi-keys`
+
+```json
+{ "name": "devices", "trust_class": "iot" }
+```
+
+- **The tenant chooses** the key's name and its trust class, and nothing else.
+- **The API chooses** the password, and takes the SSID and the VLAN from the trust class. **A tenant
+  never picks a VLAN**, which is what keeps a tenant network off the air (ADR-0011 Option B).
+- **`ssid` comes back** because a tenant should not hardcode one: the same class is `DVNTM-IOT` at
+  mobile and `DVNT-IOT` at home.
+- **Calling it again** keeps the key that is already issued. It does not mint a new one — every
+  device flashed with the old one would stop associating.
+- **`psk` is supplied only to restore** a key the tenant already holds, after the API has lost its
+  copy (ADR-0012 §5). The controller is then made to match the devices, rather than the devices
+  having to be reflashed. It must be 8 to 63 visible ASCII characters.
+
+`201` with the key and its `psk`. `502` when the controller step fails, with the key in the body —
+including its `psk`, so a retry supplies the same one. `400` for a trust class the site does not
+serve, and the error names the ones it does.
+
+| Route | Does |
+|---|---|
+| `GET /v1/tenants/{name}/wifi-keys` | the tenant's keys |
+| `GET /v1/tenants/{name}/wifi-keys/{key}` | one key |
+| `DELETE /v1/tenants/{name}/wifi-keys/{key}` | revokes it; every device holding it stops associating |
+
+**A read never returns the `psk`.** The holder has it in its own state; what a read says is whether
+the key still exists and, through `secrets_stored`, whether the API's copy is still readable. When
+`secrets_stored` is `false`, re-`POST` with the `psk` the tenant holds.
+
+**A key cannot change trust class.** That would move every device already holding it onto another
+VLAN, silently. Issue a new key instead.
+
+**The site may serve none of this.** Without `OMADA_API_URL` and `DEEVNET_IOT_TRUST_CLASSES` the API
+issues no keys and these routes refuse with a reason — a site with no wireless controller is a
+legitimate site.
+
 ## Egress list
 
 `GET /v1/fabric/egress` returns `{"vrfs": [{"tenant": "eds", "vrf": "vrf_eds"}]}` for every `ready`
