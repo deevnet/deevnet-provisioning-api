@@ -36,6 +36,12 @@ type Secrets struct {
 	TSIG         string
 	State        string
 	APITokenHash []byte
+	// Unreadable is set when a stored secret could not be opened - which is what
+	// a rebuilt or rotated Transit key leaves behind (ADR-0016 §6). It is not the
+	// same as a secret being empty, and the difference is the whole point: a
+	// tenant is told to supply its secrets again only when the API has some it
+	// cannot read, never because it happens to hold none.
+	Unreadable bool
 }
 
 // Step is the last recorded outcome of one backend step.

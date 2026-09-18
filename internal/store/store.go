@@ -98,18 +98,23 @@ func (p *Postgres) open(ctx context.Context, s tenant.Secrets) (tenant.Secrets, 
 	if p.sealer == nil {
 		return s, nil
 	}
-	s.TSIG = p.openOne(ctx, s.TSIG, "tsig")
-	s.State = p.openOne(ctx, s.State, "state")
+	var bad bool
+	s.TSIG, bad = p.openOne(ctx, s.TSIG, "tsig")
+	s.Unreadable = bad
+	s.State, bad = p.openOne(ctx, s.State, "state")
+	s.Unreadable = s.Unreadable || bad
 	return s, nil
 }
 
-func (p *Postgres) openOne(ctx context.Context, stored, what string) string {
+// The bool says the stored value was there and would not open, which is what
+// the tenant is told so it can supply it again. An empty column is not that.
+func (p *Postgres) openOne(ctx context.Context, stored, what string) (string, bool) {
 	out, err := p.sealer.Open(ctx, stored)
 	if err != nil {
 		p.log().Error("stored secret will not open; it must be supplied again", "secret", what, "err", err)
-		return ""
+		return "", true
 	}
-	return out
+	return out, false
 }
 
 // Migrate applies every embedded migration not yet recorded, in order, each in

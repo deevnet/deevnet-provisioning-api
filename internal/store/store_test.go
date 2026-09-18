@@ -71,6 +71,24 @@ func (refusingSealer) Open(_ context.Context, _ string) (string, error) {
 	return "", errors.New("decrypt: key not found")
 }
 
+// The flag says "held and unreadable", not "empty". A store with no sealer holds
+// its columns in the clear, so nothing is unreadable however they read.
+func TestSecretsAreNotUnreadableWithoutASealer(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+	if _, err := p.Create(ctx, "tplain", tenant.Secrets{TSIG: "", State: "",
+		APITokenHash: tenant.HashToken("t")}, lowest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.Get(ctx, "tplain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Secrets.Unreadable {
+		t.Error("empty columns are not unreadable ones")
+	}
+}
+
 func TestASecretThatWillNotOpenLosesTheSecretNotTheTenant(t *testing.T) {
 	p := testStore(t)
 	ctx := context.Background()
@@ -91,6 +109,9 @@ func TestASecretThatWillNotOpenLosesTheSecretNotTheTenant(t *testing.T) {
 	}
 	if got.Secrets.TSIG != "" || got.Secrets.State != "" {
 		t.Errorf("an unreadable secret must read as empty, got %q / %q", got.Secrets.TSIG, got.Secrets.State)
+	}
+	if !got.Secrets.Unreadable {
+		t.Error("the record must say its secrets are unreadable, or the tenant is never told to supply them again")
 	}
 	if !bytes.Equal(got.Secrets.APITokenHash, tenant.HashToken("t")) {
 		t.Error("the token hash is not sealed and must survive, or the tenant cannot authenticate")
