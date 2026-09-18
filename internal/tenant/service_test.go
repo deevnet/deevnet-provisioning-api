@@ -316,6 +316,31 @@ func TestWorkloadsDeriveTheirIdentity(t *testing.T) {
 	}
 }
 
+// A workload is given a recursor, never the authoritative server the router
+// forwards tenant zones to. The two were the same value once, so every tenant
+// VM came up unable to resolve a public name, a substrate name, or the
+// Deevnet API itself - the authoritative server REFUSES all three. Nothing in
+// the provisioning path notices, because provisioning never resolves anything
+// from inside the workload.
+func TestWorkloadIsGivenARecursorNotTheAuthoritativeServer(t *testing.T) {
+	svc, _, b := tenanttest.NewService()
+	if _, err := svc.Create(ctx, tenant.CreateRequest{Name: "eds"}); err != nil {
+		t.Fatal(err)
+	}
+	w, err := svc.CreateWorkload(ctx, "eds", tenant.WorkloadRequest{Name: "svc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := tenanttest.MobileSite()
+	spec := b.Workloads[w.VMID]
+	if spec.Nameserver != site.WorkloadResolver {
+		t.Errorf("nameserver = %q, want the workload resolver %q", spec.Nameserver, site.WorkloadResolver)
+	}
+	if spec.Nameserver == site.ResolverForwardTo {
+		t.Errorf("nameserver = %q, the authoritative server the router forwards to; a workload cannot resolve with it", spec.Nameserver)
+	}
+}
+
 func TestWorkloadValidation(t *testing.T) {
 	svc, _, _ := tenanttest.NewService()
 	if _, err := svc.CreateWorkload(ctx, "nobody", tenant.WorkloadRequest{Name: "web"}); !errors.Is(err, tenant.ErrNotFound) {

@@ -25,6 +25,7 @@ func fullEnv() map[string]string {
 		"DEEVNET_STATE_ENDPOINT":      "http://tfstate.mobile.deevnet.net:9000",
 		"DEEVNET_STATE_BUCKET":        "tf-state",
 		"DEEVNET_RESOLVER_FORWARD_TO": "10.20.25.21",
+		"DEEVNET_WORKLOAD_RESOLVER":   "10.20.50.1",
 		"POWERDNS_API_URL":            "http://10.20.25.21:8081",
 		"POWERDNS_API_KEY":            "k",
 		"OPNSENSE_API_URL":            "https://10.20.25.1/api",

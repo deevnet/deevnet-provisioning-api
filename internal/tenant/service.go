@@ -484,7 +484,7 @@ func (s *Service) workloadSpec(rec Record, w Workload) WorkloadSpec {
 		Bridge:         net.VNets[0].ID,
 		Address:        w.Address + "/24",
 		Gateway:        n.Gateway,
-		Nameserver:     s.Site.ResolverForwardTo,
+		Nameserver:     s.Site.WorkloadResolver,
 		Cores:          w.Cores,
 		MemoryMB:       w.MemoryMB,
 		DiskGB:         w.DiskGB,

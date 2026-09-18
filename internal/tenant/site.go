@@ -75,8 +75,17 @@ type Site struct {
 	StateBucket   string
 
 	// Where the core router's resolver forwards tenant zones: the address of
-	// the tenant DNS server.
+	// the tenant DNS server. Authoritative, so it answers tenant zones and
+	// REFUSES everything else - which is what a forward target is for, and
+	// why it is not what a workload may point at. See WorkloadResolver.
 	ResolverForwardTo string
+
+	// What a workload is given as its cloud-init nameserver: a recursor, so
+	// the workload can resolve public names, substrate names and its own
+	// tenant's names alike. The tenant_transit gateway is the first substrate
+	// hop a tenant's traffic reaches, and the core router answering there both
+	// recurses and forwards tenant zones to ResolverForwardTo.
+	WorkloadResolver string
 
 	// --- Workloads (ADR-0015 §12) ---
 	// First VMID of the site's tenant band. A workload's VMID is
@@ -115,6 +124,8 @@ func (s Site) Validate() error {
 		return fmt.Errorf("state endpoint and bucket are required")
 	case s.ResolverForwardTo == "":
 		return fmt.Errorf("resolver forward target is required")
+	case s.WorkloadResolver == "":
+		return fmt.Errorf("workload resolver is required")
 	case s.TenantVMIDBase <= 0:
 		return fmt.Errorf("tenant VMID base must be positive")
 	case s.MACNamespace == "":
