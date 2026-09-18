@@ -17,6 +17,12 @@
 //   - getPPSKProfileDetail returns the keys, including their passwords in
 //     plaintext. That is what makes read-before-write possible here.
 //   - delete-psk takes key NAMES, not ids.
+//   - **A profile cannot be emptied by deleting.** delete-psk refuses to remove
+//     the last entry: errorCode -34044, "The PPSK Profile should have at least
+//     one PSK entry." The controller is asymmetric about this - createPPSKProfile
+//     accepts an empty list quite happily, so an empty profile is a legal state
+//     that this operation will not reach. Found on the wire (CHG-0013 phase 3);
+//     the published schema documents no such minimum. See placeholderName.
 //   - A key's psk must be 8 to 63 visible ASCII characters, and its name 1 to 64.
 //
 // Unlike every other backend, the credential here expires: the token is a
@@ -29,11 +35,13 @@ package omada
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -49,6 +57,22 @@ const defaultTokenTTL = 10 * time.Minute
 // tokenSkew re-authenticates this far before expiry, so a token cannot lapse
 // between the check and the call that uses it.
 const tokenSkew = 60 * time.Second
+
+// placeholderName is the key that keeps a profile from going empty.
+//
+// The controller will not let delete-psk remove a profile's last key, so
+// revoking a tenant's only key would otherwise fail outright. Instead a
+// placeholder is added first, the real key is deleted, and the profile is left
+// holding one entry that belongs to nobody. It is removed again as soon as any
+// real key is issued, so it is only ever present when the alternative would be
+// an empty profile.
+//
+// Its password is generated here, returned to nobody and stored nowhere, so the
+// key cannot be used to join anything. The name is deliberately shouty and
+// deliberately impossible to collide with a real one: a real key is
+// "<tenant>-<label>", and a tenant name is lowercase (ADR-0015 §1), so nothing
+// a tenant can ask for starts with an upper-case letter.
+const placeholderName = "DEEVNET-PLACEHOLDER-DO-NOT-USE"
 
 // Client is a tenant.Wireless.
 type Client struct {
@@ -280,6 +304,9 @@ func (c *Client) EnsureKey(ctx context.Context, k tenant.WiFiKeySpec) error {
 	if k.Name == "" || len(k.Name) > 64 {
 		return errors.New("key name must be 1 to 64 characters")
 	}
+	if k.Name == placeholderName {
+		return fmt.Errorf("%q is reserved", placeholderName)
+	}
 	if k.VLAN < 1 || k.VLAN > 4094 {
 		return fmt.Errorf("vlan %d is outside 1-4094", k.VLAN)
 	}
@@ -295,22 +322,44 @@ func (c *Client) EnsureKey(ctx context.Context, k tenant.WiFiKeySpec) error {
 	if err != nil {
 		return err
 	}
+
+	needsWrite := true
 	for _, e := range existing {
 		if e.Name != k.Name {
 			continue
 		}
 		if e.PSK == k.PSK && e.VLAN == k.VLAN {
-			return nil // already right
+			needsWrite = false
+			break
 		}
 		// The controller has no modify-one-key operation, so a correction is a
-		// delete and an add. This is the only moment the key is absent, and it
-		// happens only when it was already wrong.
+		// delete and an add. When this is the profile's only entry the delete
+		// would be the one that empties it, which the controller refuses - so
+		// guardMinimum puts the placeholder in first.
+		if _, err := c.guardMinimum(ctx, siteID, profile.ID, existing, k.Name); err != nil {
+			return err
+		}
 		if err := c.deleteKeys(ctx, siteID, profile.ID, k.Name); err != nil {
 			return err
 		}
 		break
 	}
-	return c.addKey(ctx, siteID, profile.ID, pskEntry{Name: k.Name, PSK: k.PSK, VLAN: k.VLAN})
+	if needsWrite {
+		if err := c.addKey(ctx, siteID, profile.ID, pskEntry{Name: k.Name, PSK: k.PSK, VLAN: k.VLAN}); err != nil {
+			return err
+		}
+	}
+	// A real key now exists, so the placeholder has done its job. Re-reading is
+	// the honest way to find out whether one is there: it may have been present
+	// already, or added by the correction path above.
+	after, err := c.keysIn(ctx, siteID, profile.ID)
+	if err != nil {
+		return err
+	}
+	if hasPlaceholder(after) {
+		return c.deleteKeys(ctx, siteID, profile.ID, placeholderName)
+	}
+	return nil
 }
 
 // RemoveKey deletes the key. One that is not there is not an error, so a
@@ -328,12 +377,92 @@ func (c *Client) RemoveKey(ctx context.Context, ssid, name string) error {
 	if err != nil {
 		return err
 	}
+	found := false
 	for _, e := range existing {
 		if e.Name == name {
-			return c.deleteKeys(ctx, siteID, profile.ID, name)
+			found = true
+			break
 		}
 	}
-	return nil
+	if !found {
+		return nil
+	}
+	if _, err := c.guardMinimum(ctx, siteID, profile.ID, existing, name); err != nil {
+		return err
+	}
+	return c.deleteKeys(ctx, siteID, profile.ID, name)
+}
+
+// guardMinimum makes it safe to delete name: if name is the profile's only
+// entry, it adds the placeholder first, so the delete is never the call that
+// empties the profile. It reports whether the profile holds a placeholder
+// afterwards.
+//
+// Order matters. Adding first and deleting second means a failure part-way
+// leaves the tenant's key intact and one spare entry behind, which the next
+// issuance cleans up. Deleting first would fail outright and change nothing,
+// which is safe but leaves the revocation undone - the defect this exists for.
+func (c *Client) guardMinimum(ctx context.Context, siteID, profileID string, existing []pskEntry, name string) (bool, error) {
+	others := 0
+	for _, e := range existing {
+		if e.Name != name && e.Name != placeholderName {
+			others++
+		}
+	}
+	if hasPlaceholder(existing) {
+		return true, nil
+	}
+	if others > 0 {
+		return false, nil
+	}
+	psk, err := randomPlaceholderPSK()
+	if err != nil {
+		return false, err
+	}
+	if err := c.addKey(ctx, siteID, profileID, pskEntry{
+		Name: placeholderName, PSK: psk, VLAN: vlanOf(existing, name),
+	}); err != nil {
+		return false, fmt.Errorf("adding the placeholder that lets the last key be revoked: %w", err)
+	}
+	return true, nil
+}
+
+func hasPlaceholder(keys []pskEntry) bool {
+	for _, e := range keys {
+		if e.Name == placeholderName {
+			return true
+		}
+	}
+	return false
+}
+
+// vlanOf reuses the revoked key's VLAN for the placeholder, so the placeholder
+// is valid for the profile's SSID. Any VLAN in range would do - nobody can use
+// the key - but matching keeps it from looking like a misconfiguration.
+func vlanOf(existing []pskEntry, name string) int {
+	for _, e := range existing {
+		if e.Name == name && e.VLAN >= 1 && e.VLAN <= 4094 {
+			return e.VLAN
+		}
+	}
+	return 1
+}
+
+// randomPlaceholderPSK generates a password for the placeholder. It is returned
+// to nobody and stored nowhere, which is what makes the placeholder unusable
+// rather than a credential left lying around.
+func randomPlaceholderPSK() (string, error) {
+	const alphabet = "abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXYZ23456789"
+	out := make([]byte, 32)
+	n := big.NewInt(int64(len(alphabet)))
+	for i := range out {
+		v, err := rand.Int(rand.Reader, n)
+		if err != nil {
+			return "", err
+		}
+		out[i] = alphabet[v.Int64()]
+	}
+	return string(out), nil
 }
 
 func (c *Client) addKey(ctx context.Context, siteID, profileID string, e pskEntry) error {

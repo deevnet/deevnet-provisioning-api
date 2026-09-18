@@ -256,6 +256,14 @@ the key still exists and, through `secrets_stored`, whether the API's copy is st
 **A key cannot change trust class.** That would move every device already holding it onto another
 VLAN, silently. Issue a new key instead.
 
+**One oddity you will see in the controller.** The wireless controller refuses to let a PPSK profile
+reach zero keys — `delete-psk` answers `errorCode -34044`, *"The PPSK Profile should have at least
+one PSK entry"* — even though it will happily *create* a profile with an empty list. So when the
+last real key in a profile is revoked, the API leaves one entry named
+`DEEVNET-PLACEHOLDER-DO-NOT-USE` behind. Its password is generated, returned to nobody and stored
+nowhere, so it cannot be used to join anything, and it is removed again the moment any real key is
+issued. It is only ever present when the alternative would be an empty profile.
+
 **The site may serve none of this.** Without `OMADA_API_URL` and `DEEVNET_IOT_TRUST_CLASSES` the API
 issues no keys and these routes refuse with a reason — a site with no wireless controller is a
 legitimate site.
