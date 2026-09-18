@@ -139,7 +139,13 @@ type tenantView struct {
 	DNS       dnsView     `json:"dns"`
 	State     stateView   `json:"state"`
 	APIToken  string      `json:"api_token,omitempty"`
-	Steps     []stepView  `json:"steps"`
+	// SecretsStored is false when the API holds secrets for this tenant that it
+	// can no longer read - a rebuilt or rotated Transit key (ADR-0016 §6). The
+	// tenant's own state is the authoritative copy (ADR-0015 §4), so this is how
+	// a tenant learns it should supply them again. Without it nothing in a plan
+	// differs and the resupply has to be remembered by an operator.
+	SecretsStored bool       `json:"secrets_stored"`
+	Steps         []stepView `json:"steps"`
 }
 
 // view renders a tenant. Secrets appear only when issued is non-nil, which is
@@ -169,7 +175,8 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 			KeyPrefix: "tenants/" + rec.Name + "/",
 			AccessKey: rec.Name,
 		},
-		Steps: []stepView{},
+		SecretsStored: !rec.Secrets.Unreadable,
+		Steps:         []stepView{},
 	}
 	if issued != nil {
 		v.DNS.TSIGSecret = issued.TSIGSecret

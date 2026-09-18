@@ -14,6 +14,8 @@ import (
 
 // Store is an in-memory tenant.Store.
 type Store struct {
+	// Unreadable: see Get.
+	Unreadable   bool
 	mu           sync.Mutex
 	records      map[string]tenant.Record
 	workloads    map[string]tenant.Workload
@@ -23,6 +25,8 @@ type Store struct {
 
 func NewStore() *Store { return &Store{records: map[string]tenant.Record{}} }
 
+// Unreadable makes every record report secrets the store cannot open, which is
+// what a rebuilt or rotated Transit key looks like from above.
 func (s *Store) Get(_ context.Context, name string) (tenant.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -31,6 +35,9 @@ func (s *Store) Get(_ context.Context, name string) (tenant.Record, error) {
 		return tenant.Record{}, tenant.ErrNotFound
 	}
 	r.Steps = append([]tenant.Step(nil), r.Steps...)
+	if s.Unreadable {
+		r.Secrets.TSIG, r.Secrets.State, r.Secrets.Unreadable = "", "", true
+	}
 	return r, nil
 }
 

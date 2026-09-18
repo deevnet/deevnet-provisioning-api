@@ -318,6 +318,26 @@ func TestTenantRestoresItselfAfterTheRegistryIsLost(t *testing.T) {
 
 // The audit log has to say who, not just what: it is the only record that a
 // tenant built its own workload rather than an operator doing it for them.
+// A tenant has to be able to see that the API can no longer read its secrets,
+// or the resupply is something an operator must remember (ADR-0016 §6).
+func TestTheViewSaysWhetherTheSecretsAreReadable(t *testing.T) {
+	h, store, _ := tenantServer(t)
+	_, created := call(t, h, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`)
+	if created["secrets_stored"] != true {
+		t.Fatalf("a fresh tenant reports secrets_stored %v, want true", created["secrets_stored"])
+	}
+
+	// What a rebuilt or rotated Transit key leaves behind.
+	store.Unreadable = true
+	_, got := call(t, h, http.MethodGet, "/v1/tenants/tdemo", "")
+	if got["secrets_stored"] != false {
+		t.Errorf("with unreadable secrets the view reports %v, want false", got["secrets_stored"])
+	}
+	if got["index"] == nil || got["dns"] == nil {
+		t.Error("the rest of the view must still be there; only the secrets are unreadable")
+	}
+}
+
 func TestTheAuditLogNamesTheCaller(t *testing.T) {
 	h, store, _ := tenantServer(t)
 	_, first := call(t, h, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`)
