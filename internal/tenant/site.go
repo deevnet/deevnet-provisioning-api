@@ -10,6 +10,7 @@ package tenant
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -45,6 +46,24 @@ func ValidWorkloadName(name string) bool {
 // also a DNS label, a MinIO user and a VRF suffix.
 func ValidName(name string) bool { return nameRE.MatchString(name) }
 
+// TrustClass is one IoT trust class: the SSID a device joins and the VLAN its
+// key is bound to (ADR-0011 §3).
+//
+// These are the substrate's fixed segments, not per-tenant ones. Every tenant's
+// key for a class carries the same SSID and the same VLAN, and a tenant never
+// chooses either - which is what keeps a tenant network off the air and leaves
+// ADR-0011 Option B rejected.
+//
+// Inventory is still the only declaration of them (ADR-0009). This copy is
+// projected into the API's environment by the deployment role, the same way the
+// fabric controller and the MAC namespace are, rather than being a second place
+// they are decided.
+type TrustClass struct {
+	Name string
+	SSID string
+	VLAN int
+}
+
 // Site is one site's constants. Every per-tenant identifier derives from these
 // and the index (ADR-0002); one API serves one site (ADR-0015 §8).
 type Site struct {
@@ -73,6 +92,11 @@ type Site struct {
 	// The state store tenants are offered (ADR-0007).
 	StateEndpoint string
 	StateBucket   string
+
+	// TrustClasses this site serves, by name. Empty means the site issues no
+	// Wi-Fi keys, which is a legitimate site: one without a wireless
+	// controller, which is what was deployed before CHG-0013.
+	TrustClasses map[string]TrustClass
 
 	// Where the core router's resolver forwards tenant zones: the address of
 	// the tenant DNS server. Authoritative, so it answers tenant zones and
@@ -135,7 +159,34 @@ func (s Site) Validate() error {
 	case s.Disk == "":
 		return fmt.Errorf("the disk to grow is required")
 	}
+	// Trust classes are optional, but a half-declared one would bind a key to
+	// the wrong place, so a declared one has to be complete.
+	for name, tc := range s.TrustClasses {
+		switch {
+		case tc.SSID == "":
+			return fmt.Errorf("trust class %q has no SSID", name)
+		case tc.VLAN < 1 || tc.VLAN > 4094:
+			return fmt.Errorf("trust class %q has VLAN %d, outside 1-4094", name, tc.VLAN)
+		}
+	}
 	return nil
+}
+
+// TrustClass returns the named trust class this site serves.
+func (s Site) TrustClass(name string) (TrustClass, bool) {
+	tc, ok := s.TrustClasses[name]
+	return tc, ok
+}
+
+// TrustClassNames returns the classes this site serves, sorted, for an error
+// message that tells a tenant what it may actually ask for.
+func (s Site) TrustClassNames() []string {
+	out := make([]string, 0, len(s.TrustClasses))
+	for name := range s.TrustClasses {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Numbering is everything ADR-0002 derives from one index.

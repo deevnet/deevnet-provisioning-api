@@ -5,6 +5,7 @@ package tenanttest
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ type Store struct {
 	mu           sync.Mutex
 	records      map[string]tenant.Record
 	workloads    map[string]tenant.Workload
+	wifiKeys     map[string]tenant.WiFiKey
 	extraRecords map[string]tenant.ExtraRecord
 	AuditLog     []tenant.AuditEntry
 }
@@ -215,6 +217,78 @@ func (s *Store) DeleteWorkload(_ context.Context, tenantName, name string) error
 	return nil
 }
 
+func (s *Store) PutWiFiKey(_ context.Context, k tenant.WiFiKey) (tenant.WiFiKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[k.Tenant]; !ok {
+		return tenant.WiFiKey{}, tenant.ErrNotFound
+	}
+	if s.wifiKeys == nil {
+		s.wifiKeys = map[string]tenant.WiFiKey{}
+	}
+	key := k.Tenant + "/" + k.Name
+	if old, ok := s.wifiKeys[key]; ok {
+		k.CreatedAt = old.CreatedAt
+		// The trust class is fixed once issued; the service refuses a change
+		// before it reaches the store, and the store does not silently take one.
+		k.TrustClass = old.TrustClass
+	} else {
+		k.CreatedAt = time.Now()
+	}
+	k.UpdatedAt = time.Now()
+	s.wifiKeys[key] = k
+	return k, nil
+}
+
+func (s *Store) GetWiFiKey(_ context.Context, tenantName, name string) (tenant.WiFiKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.wifiKeys[tenantName+"/"+name]
+	if !ok {
+		return tenant.WiFiKey{}, tenant.ErrNotFound
+	}
+	if s.Unreadable {
+		k.PSK, k.Unreadable = "", true
+	}
+	return k, nil
+}
+
+func (s *Store) ListWiFiKeys(_ context.Context, tenantName string) ([]tenant.WiFiKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.WiFiKey
+	for _, k := range s.wifiKeys {
+		if k.Tenant == tenantName {
+			if s.Unreadable {
+				k.PSK, k.Unreadable = "", true
+			}
+			out = append(out, k)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Store) SetWiFiKeyStatus(_ context.Context, tenantName, name string, status tenant.Status) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.wifiKeys[tenantName+"/"+name]
+	if !ok {
+		return tenant.ErrNotFound
+	}
+	k.Status = status
+	k.UpdatedAt = time.Now()
+	s.wifiKeys[tenantName+"/"+name] = k
+	return nil
+}
+
+func (s *Store) DeleteWiFiKey(_ context.Context, tenantName, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.wifiKeys, tenantName+"/"+name)
+	return nil
+}
+
 func (s *Store) PutRecord(_ context.Context, r tenant.ExtraRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -260,8 +334,12 @@ type Backends struct {
 	States       map[string]tenant.StateTenant
 	FabricClaims []tenant.Claim
 
+	// WiFiKeys is keyed "<ssid>/<name>", which is how the controller identifies
+	// a key: a name inside the profile bound to that SSID.
+	WiFiKeys map[string]tenant.WiFiKeySpec
+
 	FailDNS, FailResolver, FailState, FailFabric error
-	FailNetwork, FailCompute                     error
+	FailNetwork, FailCompute, FailWireless       error
 }
 
 func NewBackends() *Backends {
@@ -272,6 +350,7 @@ func NewBackends() *Backends {
 		Workloads:  map[int]tenant.WorkloadSpec{},
 		Forwards:   map[string]tenant.Forward{},
 		States:     map[string]tenant.StateTenant{},
+		WiFiKeys:   map[string]tenant.WiFiKeySpec{},
 	}
 }
 
@@ -282,6 +361,32 @@ func (b *Backends) State() tenant.StateStore  { return stateFake{b} }
 func (b *Backends) Fabric() tenant.Fabric     { return fabricFake{b} }
 func (b *Backends) Network() tenant.Network   { return networkFake{b} }
 func (b *Backends) Compute() tenant.Compute   { return computeFake{b} }
+func (b *Backends) Wireless() tenant.Wireless { return wirelessFake{b} }
+
+type wirelessFake struct{ b *Backends }
+
+func (f wirelessFake) EnsureKey(_ context.Context, k tenant.WiFiKeySpec) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailWireless != nil {
+		return f.b.FailWireless
+	}
+	if !tenant.ValidPSK(k.PSK) {
+		return errors.New("psk must be 8 to 63 visible ASCII characters")
+	}
+	f.b.WiFiKeys[k.SSID+"/"+k.Name] = k
+	return nil
+}
+
+func (f wirelessFake) RemoveKey(_ context.Context, ssid, name string) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailWireless != nil {
+		return f.b.FailWireless
+	}
+	delete(f.b.WiFiKeys, ssid+"/"+name)
+	return nil
+}
 
 type networkFake struct{ b *Backends }
 
@@ -455,6 +560,10 @@ func MobileSite() tenant.Site {
 		Storage:           "local-lvm",
 		Disk:              "scsi0",
 		CIUser:            "a_autoprov",
+		TrustClasses: map[string]tenant.TrustClass{
+			"iot":        {Name: "iot", SSID: "DVNTM-IOT", VLAN: 30},
+			"iot_vendor": {Name: "iot_vendor", SSID: "DVNTM-IOTV", VLAN: 31},
+		},
 	}
 }
 
@@ -508,6 +617,7 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		Fabric:   b.Fabric(),
 		Network:  b.Network(),
 		Compute:  b.Compute(),
+		Wireless: b.Wireless(),
 		Tokens:   tokens,
 		Enroller: &Enroller{},
 	}, st, b

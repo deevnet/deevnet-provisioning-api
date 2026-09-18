@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/minio"
+	"github.com/deevnet/deevnet-provisioning-api/internal/backend/omada"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/opnsense"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/powerdns"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/proxmox"
@@ -60,6 +61,26 @@ var credentials = []string{
 	"proxmox_token_secret",
 	// Base64, at least 32 bytes: the MAC key of tenant tokens.
 	"token_hmac_key",
+}
+
+// omadaEnv is what the API needs to issue tenant Wi-Fi keys (ADR-0012 §3).
+// OMADA_API_URL turns it on; the rest is then required. It is deliberately NOT
+// part of siteEnv or credentials: a site with no wireless controller is a
+// legitimate site - it is what was deployed before CHG-0013 - and putting these
+// in the required lists would fail every such deployment on the first image
+// bump, before the vault had the values.
+var omadaEnv = []string{
+	"OMADA_API_URL",
+	"DEEVNET_IOT_TRUST_CLASSES",
+}
+
+// omadaCredentials are checked only when OMADA_API_URL is set. The API gets its
+// OWN Open API client, separate from the one Ansible uses: the permission is
+// the same either way, but the blast radius, the rotation and the controller's
+// audit log are not.
+var omadaCredentials = []string{
+	"omada_client_id",
+	"omada_client_secret",
 }
 
 // openbaoEnv is what the API needs to reach OpenBao. OPENBAO_ADDR turns
@@ -128,7 +149,10 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		enroller, sealer = bao, bao
 	} else {
 		creds = map[string]string{}
-		for _, k := range credentials {
+		// The optional ones are read here too, so a local run without OpenBao
+		// can still reach a controller. They are not added to the required
+		// check below.
+		for _, k := range append(append([]string{}, credentials...), omadaCredentials...) {
 			creds[k] = getenv(strings.ToUpper(k))
 		}
 	}
@@ -184,6 +208,20 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		Disk:              getenv("DEEVNET_TENANT_DISK"),
 		CIUser:            getenv("DEEVNET_TENANT_CIUSER"),
 	}
+	if getenv("OMADA_API_URL") != "" {
+		if missing := empty(getenv, omadaEnv); len(missing) > 0 {
+			return wiring{}, fmt.Errorf("OMADA_API_URL is set, but these are empty: %s", strings.Join(missing, ", "))
+		}
+		var err error
+		if site.TrustClasses, err = parseTrustClasses(getenv("DEEVNET_IOT_TRUST_CLASSES")); err != nil {
+			return wiring{}, fmt.Errorf("DEEVNET_IOT_TRUST_CLASSES: %w", err)
+		}
+		for _, k := range omadaCredentials {
+			if creds[k] == "" {
+				return wiring{}, fmt.Errorf("OMADA_API_URL is set, but %s is missing from the backend credentials", k)
+			}
+		}
+	}
 	if err := site.Validate(); err != nil {
 		return wiring{}, fmt.Errorf("site: %w", err)
 	}
@@ -229,7 +267,51 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	if enroller != nil {
 		svc.Enroller = enroller
 	}
+	// Same reasoning: leave Wireless nil at a site with no controller, so the
+	// Wi-Fi endpoints refuse with a reason rather than dereferencing nothing.
+	if getenv("OMADA_API_URL") != "" {
+		svc.Wireless = omada.New(getenv("OMADA_API_URL"),
+			creds["omada_client_id"], creds["omada_client_secret"],
+			boolEnv(getenv, "OMADA_INSECURE_TLS", true))
+	}
 	return wiring{tenants: svc, sealer: sealer, site: site}, nil
+}
+
+// parseTrustClasses reads "iot=DVNTM-IOT:30,iot_vendor=DVNTM-IOTV:31".
+//
+// Inventory's deevnet_vlans is still where these are decided (ADR-0009); the
+// deployment role projects them here, the way it already does the fabric
+// controller. A malformed entry is a startup failure naming that entry, rather
+// than a site that quietly serves fewer classes than it was meant to.
+func parseTrustClasses(raw string) (map[string]tenant.TrustClass, error) {
+	out := map[string]tenant.TrustClass{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, rest, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("%q is not name=ssid:vlan", entry)
+		}
+		ssid, vlanStr, ok := strings.Cut(rest, ":")
+		if !ok {
+			return nil, fmt.Errorf("%q is not name=ssid:vlan", entry)
+		}
+		vlan, err := strconv.Atoi(strings.TrimSpace(vlanStr))
+		if err != nil {
+			return nil, fmt.Errorf("%q: vlan: %w", entry, err)
+		}
+		name = strings.TrimSpace(name)
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("trust class %q is declared twice", name)
+		}
+		out[name] = tenant.TrustClass{Name: name, SSID: strings.TrimSpace(ssid), VLAN: vlan}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no trust classes declared")
+	}
+	return out, nil
 }
 
 func empty(getenv func(string) string, keys []string) []string {

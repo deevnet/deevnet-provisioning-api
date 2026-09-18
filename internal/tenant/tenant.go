@@ -27,6 +27,7 @@ const (
 	StepResolver = "resolver"
 	StepState    = "state"
 	StepNetwork  = "network"
+	StepWiFiKey  = "wifi-key"
 )
 
 // Secrets are what the API keeps for a tenant. The TSIG and state secrets are
@@ -78,6 +79,26 @@ type ExtraRecord struct {
 	CreatedAt time.Time
 }
 
+// WiFiKey is a tenant's PPSK key for one trust class, as the registry holds it.
+// One key serves every device that tenant flashes with it; the substrate does
+// not know those devices individually (ADR-0012 §3, amended 2026-09-18).
+type WiFiKey struct {
+	Tenant     string
+	Name       string
+	TrustClass string
+	// PSK is the credential itself. The tenant's own state holds the
+	// authoritative copy (ADR-0012 §4); this one exists so the API can put the
+	// key back after a controller rebuild without a visit to every device.
+	PSK string
+	// Unreadable: the stored PSK would not open, exactly as Secrets.Unreadable.
+	// The tenant is told to supply it again; the key itself is not lost,
+	// because the tenant has it.
+	Unreadable bool
+	Status     Status
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 // Record is a tenant as the registry holds it.
 type Record struct {
 	Name      string
@@ -115,6 +136,13 @@ type Store interface {
 	ListWorkloads(ctx context.Context, tenantName string) ([]Workload, error)
 	SetWorkloadStatus(ctx context.Context, tenantName, name string, status Status) error
 	DeleteWorkload(ctx context.Context, tenantName, name string) error
+
+	// Wi-Fi keys (ADR-0012 §3). Nothing is allocated, so no lock is needed.
+	PutWiFiKey(ctx context.Context, k WiFiKey) (WiFiKey, error)
+	GetWiFiKey(ctx context.Context, tenantName, name string) (WiFiKey, error)
+	ListWiFiKeys(ctx context.Context, tenantName string) ([]WiFiKey, error)
+	SetWiFiKeyStatus(ctx context.Context, tenantName, name string, status Status) error
+	DeleteWiFiKey(ctx context.Context, tenantName, name string) error
 
 	// Extra records (ADR-0015 §13).
 	PutRecord(ctx context.Context, r ExtraRecord) error
@@ -179,6 +207,45 @@ type StateTenant struct {
 type StateStore interface {
 	Ensure(ctx context.Context, t StateTenant) error
 	Remove(ctx context.Context, user string) error
+}
+
+// WiFiKeySpec is one PPSK key as the wireless controller needs it. The VLAN is
+// the trust class's, never the tenant's choice, which is what keeps a tenant
+// network off the air (ADR-0011 Option B stays rejected).
+type WiFiKeySpec struct {
+	// SSID whose PPSK profile holds the key. The profile is resolved from it.
+	SSID string
+	// Name of the key inside that profile: "<tenant>-<label>".
+	Name string
+	PSK  string
+	VLAN int
+}
+
+// Wireless issues PPSK keys into the profiles inventory declares (ADR-0012 §6).
+// The keys are the carve-out: inventory owns the SSID and the profile, this
+// owns what is inside it.
+type Wireless interface {
+	// EnsureKey makes the named key exist with this PSK and VLAN, correcting one
+	// that is already there.
+	EnsureKey(ctx context.Context, k WiFiKeySpec) error
+	// RemoveKey deletes it. A key that is not there is not an error.
+	RemoveKey(ctx context.Context, ssid, name string) error
+}
+
+// ValidPSK reports whether s is a password the wireless controller will take:
+// 8 to 63 visible ASCII characters, its own documented rule. It is applied to
+// supplied PSKs as well as generated ones, so a restore cannot smuggle in a
+// value the controller will reject.
+func ValidPSK(s string) bool {
+	if len(s) < 8 || len(s) > 63 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7E {
+			return false
+		}
+	}
+	return true
 }
 
 // VNetSpec is one VNet of a tenant network: the bridge name workloads attach
