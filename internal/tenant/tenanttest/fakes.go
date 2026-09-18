@@ -448,6 +448,7 @@ func MobileSite() tenant.Site {
 		StateEndpoint:     "http://tfstate.mobile.deevnet.net:9000",
 		StateBucket:       "tf-state",
 		ResolverForwardTo: "10.20.25.21",
+		WorkloadResolver:  "10.20.50.1",
 		TenantVMIDBase:    2000,
 		MACNamespace:      "02:de:20",
 		TemplatePrefix:    "fedora-server-",
