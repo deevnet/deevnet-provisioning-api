@@ -12,12 +12,20 @@ ARTIFACTS_ROOT ?= /srv/deevnet-http
 STAGE_DIR      := $(ARTIFACTS_ROOT)/container-images/deevnet-api
 TARBALL        := deevnet-api-$(VERSION).tar
 
+# The broker account writer is a HOST binary, not a container: it runs on the
+# messaging VM beside a PostgreSQL bound to loopback, which is the whole point
+# of CHG-0016's option C. So it is staged as a plain binary and the vernemq
+# role copies it, rather than being loaded as an image.
+WRITER          := deevnet-broker-account
+WRITER_STAGE    := $(ARTIFACTS_ROOT)/binaries/$(WRITER)
+WRITER_FILE     := $(WRITER)-$(VERSION)
+
 LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Version=$(VERSION) \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.Built=$(BUILT)
 
-.PHONY: default help test test-integration vet build image stage clean
+.PHONY: default help test test-integration vet build build-writer image stage stage-writer clean
 
 default: help
 
@@ -28,6 +36,10 @@ help:
 	@echo "          the same tests against throwaway PostgreSQL, PowerDNS and MinIO containers"
 	@echo "  vet     go vet ./..."
 	@echo "  build   static binary in bin/"
+	@echo "  build-writer"
+	@echo "          the broker account writer, a host binary for the messaging VM"
+	@echo "  stage-writer"
+	@echo "          build-writer, then install it under $(ARTIFACTS_ROOT)/binaries (sudo)"
 	@echo "  image   podman build $(IMAGE):$(VERSION)"
 	@echo "  stage   image, then save it under $(STAGE_DIR) (sudo)"
 	@echo "  clean   remove bin/"
@@ -76,6 +88,12 @@ vet:
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/deevnet-api ./cmd/deevnet-api
 
+# Static and CGO-free so it does not care what is installed on the messaging
+# VM. It is invoked by sshd as a forced command, once per request, so startup
+# cost matters more than anything it would gain from dynamic linking.
+build-writer:
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(WRITER) ./cmd/$(WRITER)
+
 image:
 	podman build \
 	  --build-arg VERSION=$(VERSION) \
@@ -95,6 +113,15 @@ stage: image
 	sudo install -o nginx -g nginx -m 0644 bin/$(TARBALL) $(STAGE_DIR)/$(TARBALL)
 	sudo ln -sfn $(TARBALL) $(STAGE_DIR)/deevnet-api-latest.tar
 	@echo "staged $(STAGE_DIR)/$(TARBALL)"
+
+# Same refusal as stage, and for the same reason: what runs on a host has to be
+# traceable to a commit.
+stage-writer: build-writer
+	@case "$(VERSION)" in *-dirty|dev) echo "refusing to stage VERSION=$(VERSION); commit and tag first" >&2; exit 1;; esac
+	sudo install -d -o nginx -g nginx -m 0755 $(WRITER_STAGE)
+	sudo install -o nginx -g nginx -m 0644 bin/$(WRITER) $(WRITER_STAGE)/$(WRITER_FILE)
+	sudo ln -sfn $(WRITER_FILE) $(WRITER_STAGE)/$(WRITER)-latest
+	@echo "staged $(WRITER_STAGE)/$(WRITER_FILE)"
 
 clean:
 	rm -rf bin

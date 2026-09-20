@@ -9,8 +9,8 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 **provisioning-only**. Nothing at runtime (devices, brokers, the AP, tenant workloads) depends on it
 being up.
 
-It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys and their device registry
-(`docs/api-v1.md`). Broker accounts still answer 501, because there is no broker.
+It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry and
+their MQTT broker accounts (`docs/api-v1.md`).
 
 The repository name says what the service is for; the service itself, its binary, image and
 container keep the short name `deevnet-api`, which is what the `deevnet.mgmt` `deevnet_api` role

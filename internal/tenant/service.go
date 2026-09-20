@@ -76,6 +76,12 @@ type Service struct {
 	// Wireless issues tenant Wi-Fi keys (ADR-0012 §3). Nil at a site with no
 	// wireless controller, where the Wi-Fi endpoints refuse rather than panic.
 	Wireless Wireless
+
+	// BrokerWriter puts MQTT accounts into the broker's auth database, through
+	// the writer on the messaging VM (CHG-0016). Nil at a site with no broker,
+	// which is a legitimate site and the state every site was in before
+	// CHG-0015 - the routes then refuse with a reason rather than panicking.
+	BrokerWriter BrokerWriter
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.

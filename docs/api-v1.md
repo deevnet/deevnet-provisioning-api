@@ -319,6 +319,75 @@ issued. It is only ever present when the alternative would be an empty profile.
 issues no keys and these routes refuse with a reason — a site with no wireless controller is a
 legitimate site.
 
+## Broker accounts
+
+A tenant's MQTT account on the platform broker (ADR-0012 §3, §8, §10; CHG-0016). One account per
+thing that connects — a device, or a tenant workload.
+
+`POST /v1/tenants/{name}/broker-accounts`
+
+```json
+{
+  "name": "lightd",
+  "device": "stand-1",
+  "publish": ["lightstand/+/scene"],
+  "subscribe": ["lightstand/+/state"]
+}
+```
+
+- **The tenant chooses** the account's name, its topic patterns and, optionally, a device.
+- **The API chooses** the password and the username, which is `<tenant>-<name>` and comes back as
+  `username`. A tenant can see it without being able to pick it.
+- **Patterns are RELATIVE to the tenant.** The API writes the `<tenant>/` itself (§10), so a tenant
+  declares `lightstand/+/scene` and never its own name. They come back **absolute**, which is
+  deliberately not what went in: what comes back is what the broker will enforce.
+  - Naming another tenant does not escape. `tdemo/secrets/#` becomes `eds/tdemo/secrets/#` — a
+    topic inside `eds` that happens to be named after someone else, and grants nothing.
+  - `#` is allowed and means `eds/#`: the whole of the tenant's own tree, and no more.
+  - A pattern that cannot be prefixed into what the tenant meant is `400` — a leading `/`, a `$SYS`
+    filter, a `%` (a broker template variable), or a `#` that is not the last level.
+- **One direction may be empty.** A sensor only publishes; a collector only subscribes. Requiring
+  both would make a tenant declare a pattern it does not need, which grants permission nobody
+  wants. **Both empty is `400`**: the account could do nothing.
+- **`device` is optional.** Empty means a workload account. A named device must belong to this
+  tenant and be in trust class `iot` — `iot_vendor` is refused, because the standard forbids
+  `iot_vendor -> iot_backend` and the account could never be used.
+- **Calling it again** keeps the password that is already issued, and returns **no** `password`.
+  The API holds a bcrypt hash, not the plaintext (§4), so there is nothing to return and saying so
+  beats inventing one.
+- **`password` is supplied only to restore** an account the tenant already holds, after the API has
+  lost its copy (§5). The broker is then made to match the devices, rather than the devices having
+  to be revisited.
+
+`201` with the account and its `password`. `502` when the writer step fails, with the account in
+the body — including its `password`, so a retry supplies the same one and does not strand devices
+already flashed with the first.
+
+| Route | Does |
+|---|---|
+| `GET /v1/tenants/{name}/broker-accounts` | the tenant's accounts |
+| `GET /v1/tenants/{name}/broker-accounts/{account}` | one account |
+| `DELETE /v1/tenants/{name}/broker-accounts/{account}` | revokes it |
+
+**A read never returns the `password`**, and there is no `secrets_stored`: unlike a Wi-Fi key,
+the API never holds the plaintext at rest at all. The tenant's own state is the only copy.
+
+**Revocation stops the next connection, not the current one.** The broker caches a connection's
+ACLs and evicts on disconnect (§8), so anything connected stays connected until it reconnects.
+
+**How the account reaches the broker.** The broker's auth database is not reachable from the
+network. The API sends one request over SSH to a writer on the messaging VM, pinned to a key with
+`command=` and `restrict`
+(`architecture/substrate/control-plane/broker-account-writer` in `deevnet-docs`). The API never
+speaks to the database, and the writer never interprets `SSH_ORIGINAL_COMMAND`.
+
+**The order matters on a retry.** The hash is written to the registry *before* the writer is
+called, so a retry after an ambiguous failure sends the same hash and converges. The other order
+would mint a new password every retry.
+
+**The site may serve none of this.** Without `DEEVNET_BROKER_WRITER_ADDR` the API issues no broker
+accounts and these routes refuse with a reason — a site with no broker is a legitimate site.
+
 ## Egress list
 
 `GET /v1/fabric/egress` returns `{"vrfs": [{"tenant": "eds", "vrf": "vrf_eds"}]}` for every `ready`
