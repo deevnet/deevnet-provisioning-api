@@ -85,6 +85,12 @@ func (s *Service) CreateBrokerAccount(ctx context.Context, tenantName string, re
 	if err != nil {
 		return IssuedBrokerAccount{}, invalid("%s", err)
 	}
+	// The same rule the writer applies, applied here too, so an account that
+	// grants nothing is a 400 from the API rather than a refusal from the
+	// writer arriving as a 502 - which would read as the broker being down.
+	if err := brokeracct.CheckGrant(pub, sub); err != nil {
+		return IssuedBrokerAccount{}, invalid("%s", err)
+	}
 
 	existing, err := s.Store.GetBrokerAccount(ctx, tenantName, req.Name)
 	if err != nil && !errors.Is(err, ErrNotFound) {

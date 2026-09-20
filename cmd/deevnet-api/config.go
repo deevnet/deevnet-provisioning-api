@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/deevnet/deevnet-provisioning-api/internal/backend/brokerwriter"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/minio"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/omada"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/opnsense"
@@ -83,6 +84,28 @@ var omadaCredentials = []string{
 	"omada_client_secret",
 }
 
+// brokerEnv is what the API needs to write MQTT broker accounts (ADR-0012 §3;
+// CHG-0016). DEEVNET_BROKER_WRITER_ADDR turns it on; the rest is then
+// required. Optional again, and for the same reason as omadaEnv: a site with
+// no broker is a legitimate site, and requiring these would fail every such
+// deployment on the next image bump.
+//
+// The host key is here rather than in the credentials because it is a public
+// key, and because it is a PIN: it belongs with the address it pins, and
+// changing the messaging VM's address without its host key should be awkward.
+var brokerEnv = []string{
+	"DEEVNET_BROKER_WRITER_ADDR",
+	"DEEVNET_BROKER_WRITER_USER",
+	"DEEVNET_BROKER_HOST_KEY",
+}
+
+// brokerCredentials are checked only when DEEVNET_BROKER_WRITER_ADDR is set.
+// The API's own key, used for nothing else, so revoking it revokes exactly the
+// capability to write broker accounts.
+var brokerCredentials = []string{
+	"broker_writer_key",
+}
+
 // openbaoEnv is what the API needs to reach OpenBao. OPENBAO_ADDR turns
 // OpenBao on; the rest are then required.
 var openbaoEnv = []string{
@@ -101,6 +124,11 @@ var openbaoEnv = []string{
 //	OPNSENSE_INSECURE_TLS  "true": the router's certificate is self-signed
 //	PROXMOX_INSECURE_TLS   "true": so is the node's
 //	MINIO_ADMIN_TLS        "false"
+//
+//	DEEVNET_BROKER_CONNECT_TIMEOUT "10s": reaching the messaging VM
+//	DEEVNET_BROKER_SESSION_TIMEOUT "30s": the whole exchange once connected.
+//	                               A tenant's terraform apply is holding the
+//	                               other end, so neither may be unbounded.
 
 // wiring is what main needs beyond the service: the store's sealer and the
 // site, which the store uses to derive a workload's identity.
@@ -152,7 +180,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		// The optional ones are read here too, so a local run without OpenBao
 		// can still reach a controller. They are not added to the required
 		// check below.
-		for _, k := range append(append([]string{}, credentials...), omadaCredentials...) {
+		for _, k := range append(append(append([]string{}, credentials...), omadaCredentials...), brokerCredentials...) {
 			creds[k] = getenv(strings.ToUpper(k))
 		}
 	}
@@ -222,6 +250,16 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			}
 		}
 	}
+	if getenv("DEEVNET_BROKER_WRITER_ADDR") != "" {
+		if missing := empty(getenv, brokerEnv); len(missing) > 0 {
+			return wiring{}, fmt.Errorf("DEEVNET_BROKER_WRITER_ADDR is set, but these are empty: %s", strings.Join(missing, ", "))
+		}
+		for _, k := range brokerCredentials {
+			if creds[k] == "" {
+				return wiring{}, fmt.Errorf("DEEVNET_BROKER_WRITER_ADDR is set, but %s is missing from the backend credentials", k)
+			}
+		}
+	}
 	if err := site.Validate(); err != nil {
 		return wiring{}, fmt.Errorf("site: %w", err)
 	}
@@ -273,6 +311,35 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		svc.Wireless = omada.New(getenv("OMADA_API_URL"),
 			creds["omada_client_id"], creds["omada_client_secret"],
 			boolEnv(getenv, "OMADA_INSECURE_TLS", true))
+	}
+	// Same reasoning again: a site with no broker leaves BrokerWriter nil and
+	// the broker-account endpoints refuse with a reason.
+	//
+	// New() parses both keys here, so a bad key or an unparseable pin is a
+	// startup failure rather than a failed apply for whichever tenant goes
+	// first. There is no insecure fallback to configure: an unpinnable host is
+	// a configuration error, not a warning.
+	if getenv("DEEVNET_BROKER_WRITER_ADDR") != "" {
+		connect, err := durationEnv(getenv, "DEEVNET_BROKER_CONNECT_TIMEOUT", 10*time.Second)
+		if err != nil {
+			return wiring{}, err
+		}
+		session, err := durationEnv(getenv, "DEEVNET_BROKER_SESSION_TIMEOUT", 30*time.Second)
+		if err != nil {
+			return wiring{}, err
+		}
+		w, err := brokerwriter.New(brokerwriter.Config{
+			Addr:           getenv("DEEVNET_BROKER_WRITER_ADDR"),
+			User:           getenv("DEEVNET_BROKER_WRITER_USER"),
+			PrivateKey:     []byte(creds["broker_writer_key"]),
+			HostKey:        getenv("DEEVNET_BROKER_HOST_KEY"),
+			ConnectTimeout: connect,
+			SessionTimeout: session,
+		})
+		if err != nil {
+			return wiring{}, fmt.Errorf("broker account writer: %w", err)
+		}
+		svc.BrokerWriter = w
 	}
 	return wiring{tenants: svc, sealer: sealer, site: site}, nil
 }
@@ -329,6 +396,24 @@ func orDefault(v, def string) string {
 		return def
 	}
 	return v
+}
+
+// durationEnv reads an optional duration. A malformed one is a startup failure
+// naming the variable, rather than a silent fall back to the default - a
+// timeout that quietly is not what the operator wrote is worse than none.
+func durationEnv(getenv func(string) string, key string, def time.Duration) (time.Duration, error) {
+	v := getenv(key)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be positive", key)
+	}
+	return d, nil
 }
 
 func boolEnv(getenv func(string) string, key string, def bool) bool {

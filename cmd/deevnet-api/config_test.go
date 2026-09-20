@@ -2,8 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func env(m map[string]string) func(string) string {
@@ -191,5 +196,120 @@ func TestTrustClassVLANValidated(t *testing.T) {
 	e["OMADA_CLIENT_SECRET"] = "secret"
 	if _, err := tenantService(context.Background(), env(e)); err == nil || !strings.Contains(err.Error(), "9999") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A key pair for the broker writer tests. ed25519 so the tests stay fast.
+func writerKeys(t *testing.T) (priv string, hostKey string) {
+	t.Helper()
+	gen := func() (string, string) {
+		pub, sec, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := ssh.MarshalPrivateKey(sec, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sshPub, err := ssh.NewPublicKey(pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(pem.EncodeToMemory(block)), string(ssh.MarshalAuthorizedKey(sshPub))
+	}
+	p, _ := gen()
+	_, h := gen() // a different key: the host's, not the API's
+	return p, h
+}
+
+func brokerEnvFor(t *testing.T) map[string]string {
+	t.Helper()
+	priv, host := writerKeys(t)
+	e := fullEnv()
+	e["DEEVNET_BROKER_WRITER_ADDR"] = "10.20.35.20:22"
+	e["DEEVNET_BROKER_WRITER_USER"] = "deevnet-writer"
+	e["DEEVNET_BROKER_HOST_KEY"] = host
+	e["BROKER_WRITER_KEY"] = priv
+	return e
+}
+
+// A site with no broker is a legitimate site - it is every site before
+// CHG-0016 - and must still start.
+func TestNoBrokerStillStarts(t *testing.T) {
+	w, err := tenantService(context.Background(), env(fullEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.BrokerWriter != nil {
+		t.Error("no DEEVNET_BROKER_WRITER_ADDR should mean no broker writer")
+	}
+}
+
+func TestBrokerWriterWiredWhenConfigured(t *testing.T) {
+	w, err := tenantService(context.Background(), env(brokerEnvFor(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.BrokerWriter == nil {
+		t.Fatal("broker writer not wired")
+	}
+}
+
+func TestBrokerHalfConfigured(t *testing.T) {
+	for _, tc := range []struct{ name, drop, want string }{
+		{"no user", "DEEVNET_BROKER_WRITER_USER", "DEEVNET_BROKER_WRITER_USER"},
+		{"no host key", "DEEVNET_BROKER_HOST_KEY", "DEEVNET_BROKER_HOST_KEY"},
+		{"no private key", "BROKER_WRITER_KEY", "broker_writer_key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := brokerEnvFor(t)
+			delete(e, tc.drop)
+			_, err := tenantService(context.Background(), env(e))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to name %s", err, tc.want)
+			}
+		})
+	}
+}
+
+// Both keys are parsed at startup, so a bad one fails here rather than during
+// whichever tenant's apply happens to go first. There is no insecure fallback
+// to configure: an unpinnable host is a configuration error.
+func TestBrokerBadKeysFailAtStartup(t *testing.T) {
+	for _, tc := range []struct{ name, key, val string }{
+		{"private key", "BROKER_WRITER_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\nnope\n-----END OPENSSH PRIVATE KEY-----\n"},
+		{"host key", "DEEVNET_BROKER_HOST_KEY", "ssh-ed25519 not-base64 comment"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := brokerEnvFor(t)
+			e[tc.key] = tc.val
+			_, err := tenantService(context.Background(), env(e))
+			if err == nil {
+				t.Fatal("a malformed key started the API")
+			}
+			if !strings.Contains(err.Error(), "broker account writer") {
+				t.Errorf("err = %v, want it to name the writer", err)
+			}
+			if strings.Contains(err.Error(), "nope") || strings.Contains(err.Error(), "not-base64") {
+				t.Error("the error echoed key material")
+			}
+		})
+	}
+}
+
+// A malformed timeout is a startup failure naming the variable. A timeout that
+// quietly is not what the operator wrote is worse than none.
+func TestBrokerTimeoutsAreCheckedAndDefaulted(t *testing.T) {
+	e := brokerEnvFor(t)
+	e["DEEVNET_BROKER_SESSION_TIMEOUT"] = "30 seconds"
+	_, err := tenantService(context.Background(), env(e))
+	if err == nil || !strings.Contains(err.Error(), "DEEVNET_BROKER_SESSION_TIMEOUT") {
+		t.Fatalf("err = %v", err)
+	}
+
+	e = brokerEnvFor(t)
+	e["DEEVNET_BROKER_CONNECT_TIMEOUT"] = "0s"
+	if _, err := tenantService(context.Background(), env(e)); err == nil {
+		t.Error("an unbounded connect timeout was accepted")
 	}
 }

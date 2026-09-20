@@ -152,10 +152,29 @@ func (r Request) Validate() error {
 	if err := validHash(r.PasswordHash); err != nil {
 		return err
 	}
+	if err := CheckGrant(r.Publish, r.Subscribe); err != nil {
+		return err
+	}
 	if err := validPatterns("publish", r.Publish, r.Prefix()); err != nil {
 		return err
 	}
 	return validPatterns("subscribe", r.Subscribe, r.Prefix())
+}
+
+// CheckGrant is the rule about what an account must ask for, stated here so
+// both ends apply the same one.
+//
+// An account has to be able to do something: both lists empty is a mistake
+// worth catching rather than a permission worth writing. But ONE empty list is
+// normal and allowed - a sensor only publishes, a collector only subscribes -
+// and requiring each to declare a pattern for the direction it does not use
+// would grant permission nobody wants, which is the opposite of what topic
+// confinement exists for (ADR-0012 §10).
+func CheckGrant(publish, subscribe []string) error {
+	if len(publish) == 0 && len(subscribe) == 0 {
+		return fmt.Errorf("an account must have at least one publish or subscribe pattern")
+	}
+	return nil
 }
 
 // validHash accepts only what pgcrypto's crypt() will verify against, which
@@ -175,9 +194,6 @@ func validHash(h string) error {
 // not mean what the tenant intended, and a permission that does not mean what
 // was intended is worth refusing.
 func validPatterns(field string, pats []string, prefix string) error {
-	if len(pats) == 0 {
-		return fmt.Errorf("%s must have at least one pattern", field)
-	}
 	if len(pats) > maxPatterns {
 		return fmt.Errorf("%s has %d patterns, the limit is %d", field, len(pats), maxPatterns)
 	}
@@ -263,7 +279,7 @@ func PrefixPattern(tenantName, relative string) (string, error) {
 // rather than only that one did.
 func PrefixPatterns(tenantName, field string, relatives []string) ([]string, error) {
 	if len(relatives) == 0 {
-		return nil, fmt.Errorf("%s must have at least one pattern", field)
+		return nil, nil
 	}
 	if len(relatives) > maxPatterns {
 		return nil, fmt.Errorf("%s has %d patterns, the limit is %d", field, len(relatives), maxPatterns)

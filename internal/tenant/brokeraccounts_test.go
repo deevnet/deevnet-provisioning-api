@@ -174,13 +174,38 @@ func TestPatternsAreValidated(t *testing.T) {
 	ready(t, svc, "eds")
 	ctx := context.Background()
 
-	for _, bad := range [][]string{{"/absolute"}, {"$SYS/#"}, {"%u/x"}, {""}, {"a/#/b"}, nil} {
+	for _, bad := range [][]string{{"/absolute"}, {"$SYS/#"}, {"%u/x"}, {""}, {"a/#/b"}} {
 		req := acct()
 		req.Publish = bad
 		var inv *tenant.InvalidError
 		if _, err := svc.CreateBrokerAccount(ctx, "eds", req); !errors.As(err, &inv) {
 			t.Errorf("publish %v gave err = %v, want InvalidError", bad, err)
 		}
+	}
+}
+
+// One direction may be empty - a sensor only publishes - but an account that
+// grants neither is refused here rather than at the writer, so it reads as a
+// bad request and not as the broker being down.
+func TestAnAccountMayGrantOneDirectionButNotNeither(t *testing.T) {
+	svc, _, b := tenanttest.NewService()
+	ready(t, svc, "eds")
+	ctx := context.Background()
+
+	req := acct()
+	req.Subscribe = nil
+	if _, err := svc.CreateBrokerAccount(ctx, "eds", req); err != nil {
+		t.Fatalf("a publish-only account was refused: %v", err)
+	}
+	if got := b.BrokerAccounts["eds/"+req.Name].Subscribe; len(got) != 0 {
+		t.Errorf("the writer was handed subscribe = %v for a publish-only account", got)
+	}
+
+	req = acct()
+	req.Publish, req.Subscribe = nil, nil
+	var inv *tenant.InvalidError
+	if _, err := svc.CreateBrokerAccount(ctx, "eds", req); !errors.As(err, &inv) {
+		t.Errorf("an account granting nothing gave err = %v, want InvalidError", err)
 	}
 }
 

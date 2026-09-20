@@ -198,10 +198,25 @@ func TestPatternCountAndLengthAreBounded(t *testing.T) {
 	if err := r.Validate(); err == nil {
 		t.Error("an over-long pattern was accepted")
 	}
-	r = put()
+}
+
+// One empty list is normal: a sensor only publishes, a collector only
+// subscribes. Both empty is an account that can do nothing.
+func TestAnAccountMustGrantSomethingButNeedNotGrantBoth(t *testing.T) {
+	r := put()
 	r.Publish = nil
+	if err := r.Validate(); err != nil {
+		t.Errorf("a subscribe-only account was refused: %v", err)
+	}
+	r = put()
+	r.Subscribe = nil
+	if err := r.Validate(); err != nil {
+		t.Errorf("a publish-only account was refused: %v", err)
+	}
+	r = put()
+	r.Publish, r.Subscribe = nil, nil
 	if err := r.Validate(); err == nil {
-		t.Error("a put with no publish patterns was accepted")
+		t.Error("an account that can neither publish nor subscribe was accepted")
 	}
 }
 
