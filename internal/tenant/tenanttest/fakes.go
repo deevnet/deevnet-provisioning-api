@@ -21,6 +21,7 @@ type Store struct {
 	records      map[string]tenant.Record
 	workloads    map[string]tenant.Workload
 	wifiKeys     map[string]tenant.WiFiKey
+	devices      map[string]tenant.Device
 	extraRecords map[string]tenant.ExtraRecord
 	AuditLog     []tenant.AuditEntry
 }
@@ -286,6 +287,60 @@ func (s *Store) DeleteWiFiKey(_ context.Context, tenantName, name string) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.wifiKeys, tenantName+"/"+name)
+	return nil
+}
+
+func (s *Store) PutDevice(_ context.Context, d tenant.Device) (tenant.Device, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[d.Tenant]; !ok {
+		return tenant.Device{}, tenant.ErrNotFound
+	}
+	if s.devices == nil {
+		s.devices = map[string]tenant.Device{}
+	}
+	key := d.Tenant + "/" + d.Name
+	if old, ok := s.devices[key]; ok {
+		d.CreatedAt = old.CreatedAt
+		// The trust class is fixed once registered; the service refuses a
+		// change before it reaches the store, and the store does not silently
+		// take one.
+		d.TrustClass = old.TrustClass
+	} else {
+		d.CreatedAt = time.Now()
+	}
+	d.UpdatedAt = time.Now()
+	s.devices[key] = d
+	return d, nil
+}
+
+func (s *Store) GetDevice(_ context.Context, tenantName, name string) (tenant.Device, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.devices[tenantName+"/"+name]
+	if !ok {
+		return tenant.Device{}, tenant.ErrNotFound
+	}
+	return d, nil
+}
+
+func (s *Store) ListDevices(_ context.Context, tenantName string) ([]tenant.Device, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.Device
+	for _, d := range s.devices {
+		if d.Tenant == tenantName {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Store) DeleteDevice(_ context.Context, tenantName, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.devices, tenantName+"/"+name)
 	return nil
 }
 
