@@ -39,6 +39,11 @@ import (
 const configPath = "/etc/deevnet/broker-account.json"
 
 type config struct {
+	// Declared so the file can carry Ansible's "managed" marker. Unknown
+	// fields are refused - a typo in a config we own should be loud, not
+	// silently defaulted - so the marker has to be a field the parser knows.
+	Comment string `json:"_comment,omitempty"`
+
 	Host string `json:"host"`
 	Port int    `json:"port"`
 	Name string `json:"database"`
