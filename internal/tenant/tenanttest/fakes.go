@@ -22,6 +22,7 @@ type Store struct {
 	workloads    map[string]tenant.Workload
 	wifiKeys     map[string]tenant.WiFiKey
 	devices      map[string]tenant.Device
+	brokerAccts  map[string]tenant.BrokerAccount
 	extraRecords map[string]tenant.ExtraRecord
 	AuditLog     []tenant.AuditEntry
 }
@@ -344,6 +345,68 @@ func (s *Store) DeleteDevice(_ context.Context, tenantName, name string) error {
 	return nil
 }
 
+func (s *Store) PutBrokerAccount(_ context.Context, a tenant.BrokerAccount) (tenant.BrokerAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[a.Tenant]; !ok {
+		return tenant.BrokerAccount{}, tenant.ErrNotFound
+	}
+	if s.brokerAccts == nil {
+		s.brokerAccts = map[string]tenant.BrokerAccount{}
+	}
+	key := a.Tenant + "/" + a.Name
+	if old, ok := s.brokerAccts[key]; ok {
+		a.CreatedAt = old.CreatedAt
+	} else {
+		a.CreatedAt = time.Now()
+	}
+	a.UpdatedAt = time.Now()
+	s.brokerAccts[key] = a
+	return a, nil
+}
+
+func (s *Store) GetBrokerAccount(_ context.Context, tenantName, name string) (tenant.BrokerAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.brokerAccts[tenantName+"/"+name]
+	if !ok {
+		return tenant.BrokerAccount{}, tenant.ErrNotFound
+	}
+	return a, nil
+}
+
+func (s *Store) ListBrokerAccounts(_ context.Context, tenantName string) ([]tenant.BrokerAccount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.BrokerAccount
+	for _, a := range s.brokerAccts {
+		if a.Tenant == tenantName {
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Store) SetBrokerAccountStatus(_ context.Context, tenantName, name string, status tenant.Status) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.brokerAccts[tenantName+"/"+name]
+	if !ok {
+		return tenant.ErrNotFound
+	}
+	a.Status = status
+	s.brokerAccts[tenantName+"/"+name] = a
+	return nil
+}
+
+func (s *Store) DeleteBrokerAccount(_ context.Context, tenantName, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.brokerAccts, tenantName+"/"+name)
+	return nil
+}
+
 func (s *Store) PutRecord(_ context.Context, r tenant.ExtraRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -393,19 +456,28 @@ type Backends struct {
 	// a key: a name inside the profile bound to that SSID.
 	WiFiKeys map[string]tenant.WiFiKeySpec
 
+	// BrokerAccounts is keyed "<tenant>/<name>", which is how the registry
+	// identifies one. What the writer would have stored is kept verbatim, so a
+	// test can assert the patterns really carried the tenant's prefix.
+	BrokerAccounts map[string]tenant.BrokerAccount
+	// BrokerErr, when set, is returned by every Put. It stands in for the
+	// ambiguous failure the retry path exists for.
+	BrokerErr error
+
 	FailDNS, FailResolver, FailState, FailFabric error
 	FailNetwork, FailCompute, FailWireless       error
 }
 
 func NewBackends() *Backends {
 	return &Backends{
-		DNSTenants: map[string]tenant.DNSTenant{},
-		DNSRecords: map[string]tenant.DNSRecord{},
-		Networks:   map[string]tenant.NetworkSpec{},
-		Workloads:  map[int]tenant.WorkloadSpec{},
-		Forwards:   map[string]tenant.Forward{},
-		States:     map[string]tenant.StateTenant{},
-		WiFiKeys:   map[string]tenant.WiFiKeySpec{},
+		DNSTenants:     map[string]tenant.DNSTenant{},
+		DNSRecords:     map[string]tenant.DNSRecord{},
+		Networks:       map[string]tenant.NetworkSpec{},
+		Workloads:      map[int]tenant.WorkloadSpec{},
+		Forwards:       map[string]tenant.Forward{},
+		States:         map[string]tenant.StateTenant{},
+		WiFiKeys:       map[string]tenant.WiFiKeySpec{},
+		BrokerAccounts: map[string]tenant.BrokerAccount{},
 	}
 }
 
@@ -656,6 +728,27 @@ func (e *Enroller) Unwrap(_ context.Context, token string) (map[string]string, e
 }
 
 // NewService wires a service to fresh fakes, with enrollment on.
+type brokerWriter struct{ b *Backends }
+
+// BrokerWriter returns a stand-in for the program on the messaging VM.
+func (b *Backends) BrokerWriter() tenant.BrokerWriter { return &brokerWriter{b} }
+
+func (w *brokerWriter) Put(_ context.Context, a tenant.BrokerAccount) error {
+	if w.b.BrokerErr != nil {
+		return w.b.BrokerErr
+	}
+	w.b.BrokerAccounts[a.Tenant+"/"+a.Name] = a
+	return nil
+}
+
+func (w *brokerWriter) Remove(_ context.Context, tenantName, name string) error {
+	if w.b.BrokerErr != nil {
+		return w.b.BrokerErr
+	}
+	delete(w.b.BrokerAccounts, tenantName+"/"+name)
+	return nil
+}
+
 func NewService() (*tenant.Service, *Store, *Backends) {
 	st := NewStore()
 	b := NewBackends()
@@ -664,16 +757,17 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		panic(err)
 	}
 	return &tenant.Service{
-		Site:     MobileSite(),
-		Store:    st,
-		DNS:      b.DNS(),
-		Resolver: b.Resolver(),
-		State:    b.State(),
-		Fabric:   b.Fabric(),
-		Network:  b.Network(),
-		Compute:  b.Compute(),
-		Wireless: b.Wireless(),
-		Tokens:   tokens,
-		Enroller: &Enroller{},
+		Site:         MobileSite(),
+		Store:        st,
+		DNS:          b.DNS(),
+		Resolver:     b.Resolver(),
+		State:        b.State(),
+		Fabric:       b.Fabric(),
+		Network:      b.Network(),
+		Compute:      b.Compute(),
+		Wireless:     b.Wireless(),
+		BrokerWriter: b.BrokerWriter(),
+		Tokens:       tokens,
+		Enroller:     &Enroller{},
 	}, st, b
 }

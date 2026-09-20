@@ -214,3 +214,45 @@ func TestOpMustBeKnown(t *testing.T) {
 		}
 	}
 }
+
+func TestPrefixPatternAddsTheTenantsOwnPrefix(t *testing.T) {
+	got, err := PrefixPattern("eds", "lightstand/+/scene")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "eds/lightstand/+/scene" {
+		t.Errorf("PrefixPattern = %q", got)
+	}
+}
+
+// A tenant cannot escape its prefix by what it declares, because the prefix is
+// prepended rather than checked for.
+func TestPrefixPatternCannotEscape(t *testing.T) {
+	for _, rel := range []string{"/absolute", "$SYS/#", "%u/x", "", "a/#/b", "a+/b"} {
+		if got, err := PrefixPattern("eds", rel); err == nil {
+			t.Errorf("relative %q was accepted, giving %q", rel, got)
+		}
+	}
+	// Declaring another tenant's name is harmless: it lands under its own.
+	got, err := PrefixPattern("eds", "tdemo/secrets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "eds/tdemo/secrets" {
+		t.Errorf("got %q, want it under eds/", got)
+	}
+}
+
+// What the API prefixes must be what the writer accepts. If these two ever
+// disagree, a tenant gets a pattern accepted and then refused downstream.
+func TestPrefixedPatternsSatisfyTheWriter(t *testing.T) {
+	abs, err := PrefixPatterns("eds", "publish", []string{"lightstand/+/scene", "status/#", "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := put()
+	r.Publish, r.Subscribe = abs, abs
+	if err := r.Validate(); err != nil {
+		t.Fatalf("the writer refused what the API prefixed: %v", err)
+	}
+}

@@ -28,6 +28,7 @@ const (
 	StepState    = "state"
 	StepNetwork  = "network"
 	StepWiFiKey  = "wifi-key"
+	StepBroker   = "broker-account"
 )
 
 // Secrets are what the API keeps for a tenant. The TSIG and state secrets are
@@ -121,6 +122,40 @@ type Device struct {
 	UpdatedAt time.Time
 }
 
+// BrokerAccount is an MQTT account as the registry holds it (ADR-0012 §3).
+//
+// It belongs either to one of the tenant's devices or to a tenant workload:
+// Device is optional, and empty means a workload account. A device account
+// needs trust class iot, because the standard declares no
+// iot_vendor -> iot_backend path and an account that could never be used
+// would imply one.
+type BrokerAccount struct {
+	Tenant    string
+	Name      string
+	Device    string
+	Publish   []string
+	Subscribe []string
+
+	// PasswordHash is a bcrypt hash and NOT a sealed secret, which is a
+	// deliberate difference from WiFiKey.
+	//
+	// A Wi-Fi key is stored because the controller needs the plaintext, so the
+	// API keeps a usable copy and seals it. The broker needs only the hash, so
+	// the API never holds the plaintext at rest at all - the tenant's own
+	// state is the only place it exists (ADR-0012 §4).
+	//
+	// It is not sealed, and that is the point rather than an omission. An
+	// unreadable hash would leave the API unable to restore the account, and
+	// the tenant's only recovery would be a new password and a visit to every
+	// device holding the old one - which is exactly what ADR-0012 §5 says a
+	// substrate rebuild must never cost. A bcrypt hash is already a one-way
+	// function; sealing it would trade a guarantee for very little.
+	PasswordHash string
+	Status       Status
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 // Record is a tenant as the registry holds it.
 type Record struct {
 	Name      string
@@ -165,6 +200,15 @@ type Store interface {
 	ListWiFiKeys(ctx context.Context, tenantName string) ([]WiFiKey, error)
 	SetWiFiKeyStatus(ctx context.Context, tenantName, name string, status Status) error
 	DeleteWiFiKey(ctx context.Context, tenantName, name string) error
+
+	// Broker accounts (ADR-0012 §3). Nothing is allocated. The hash is stored
+	// before the writer is called, so a retry after an ambiguous failure sends
+	// the same one - see CreateBrokerAccount.
+	PutBrokerAccount(ctx context.Context, a BrokerAccount) (BrokerAccount, error)
+	GetBrokerAccount(ctx context.Context, tenantName, name string) (BrokerAccount, error)
+	ListBrokerAccounts(ctx context.Context, tenantName string) ([]BrokerAccount, error)
+	SetBrokerAccountStatus(ctx context.Context, tenantName, name string, status Status) error
+	DeleteBrokerAccount(ctx context.Context, tenantName, name string) error
 
 	// Devices (ADR-0012 §3). Nothing is allocated, so no lock is needed, and
 	// nothing is sealed, because a device row carries no secret.
@@ -259,6 +303,23 @@ type Wireless interface {
 	EnsureKey(ctx context.Context, k WiFiKeySpec) error
 	// RemoveKey deletes it. A key that is not there is not an error.
 	RemoveKey(ctx context.Context, ssid, name string) error
+}
+
+// BrokerWriter puts an account into the broker's auth database.
+//
+// The broker's database is not reachable from the network (CHG-0016), so this
+// is not a database client: it is a request to a program on the messaging VM,
+// which is the only thing that can reach it.
+//
+// Every operation is idempotent. The caller supplies the same hash on a retry,
+// so an ambiguous failure - a timeout, a dropped connection - is safe to
+// repeat rather than something that has to be reconciled.
+type BrokerWriter interface {
+	// Put creates or updates the account. Patterns arrive already carrying the
+	// tenant's prefix; the far end re-checks that and refuses anything else.
+	Put(ctx context.Context, a BrokerAccount) error
+	// Remove deletes it. An account that is not there is not an error.
+	Remove(ctx context.Context, tenantName, name string) error
 }
 
 // ValidPSK reports whether s is a password the wireless controller will take:

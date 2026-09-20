@@ -223,3 +223,58 @@ func validWildcards(where, pat string) error {
 	}
 	return nil
 }
+
+// PrefixPattern validates a pattern as the TENANT declares it - relative to
+// its own prefix - and returns the absolute form the writer will be sent.
+//
+// This is the API's half of ADR-0012 §10: "A tenant declares topic patterns
+// relative to its prefix. eds declares lightstand/+/scene, and the API stores
+// eds/lightstand/+/scene." Prefixing rather than only refusing leaves the
+// tenant nothing to get wrong.
+//
+// The rules live here, beside the ones the writer applies to the result, so
+// the two cannot drift into disagreeing about what a valid filter is.
+func PrefixPattern(tenantName, relative string) (string, error) {
+	switch {
+	case relative == "":
+		return "", fmt.Errorf("pattern is empty")
+	case len(relative) > maxPattern:
+		return "", fmt.Errorf("pattern is longer than %d characters", maxPattern)
+	case strings.HasPrefix(relative, "/"):
+		// A leading slash makes the first level empty, so the prefixed form
+		// would be "eds//…" - which is a legal MQTT filter that does not mean
+		// what the tenant intended.
+		return "", fmt.Errorf("pattern must not start with /")
+	case strings.HasPrefix(relative, "$"):
+		// $-prefixed topics are reserved. Prefixed it would no longer be
+		// reserved, which is worse than refusing it.
+		return "", fmt.Errorf("pattern must not start with $")
+	case strings.ContainsRune(relative, '%'):
+		return "", fmt.Errorf("pattern must not contain %%")
+	}
+	absolute := tenantName + "/" + relative
+	if err := validWildcards("pattern", absolute); err != nil {
+		return "", err
+	}
+	return absolute, nil
+}
+
+// PrefixPatterns prefixes a tenant's whole list, reporting which entry failed
+// rather than only that one did.
+func PrefixPatterns(tenantName, field string, relatives []string) ([]string, error) {
+	if len(relatives) == 0 {
+		return nil, fmt.Errorf("%s must have at least one pattern", field)
+	}
+	if len(relatives) > maxPatterns {
+		return nil, fmt.Errorf("%s has %d patterns, the limit is %d", field, len(relatives), maxPatterns)
+	}
+	out := make([]string, 0, len(relatives))
+	for i, rel := range relatives {
+		abs, err := PrefixPattern(tenantName, rel)
+		if err != nil {
+			return nil, fmt.Errorf("%s pattern %d: %w", field, i+1, err)
+		}
+		out = append(out, abs)
+	}
+	return out, nil
+}
