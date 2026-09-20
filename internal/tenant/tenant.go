@@ -99,6 +99,28 @@ type WiFiKey struct {
 	UpdatedAt  time.Time
 }
 
+// Device is one of a tenant's edge devices as the registry holds it
+// (ADR-0012 §3). The entry is the device's identity: an application-owned
+// device takes no substrate host record, leases from its trust class's pool and
+// is named in its owner's own zone (ADR-0011 open question 3).
+//
+// A row here is identity, never authorization. What a device is allowed to
+// consume is carried by a credential it proves (ADR-0020 §2), and that
+// credential is a later layer - this type deliberately holds none.
+type Device struct {
+	Tenant     string
+	Name       string
+	TrustClass string
+	// MAC is optional, and is a label for the owner's own inventory. Nothing
+	// the substrate does may turn on it: a MAC is trivially spoofed on a shared
+	// segment, so binding to one stops nobody who is trying (ADR-0012 §3) and
+	// it is explicitly not an authorization input (ADR-0020 §2).
+	MAC       string
+	Status    Status
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 // Record is a tenant as the registry holds it.
 type Record struct {
 	Name      string
@@ -143,6 +165,13 @@ type Store interface {
 	ListWiFiKeys(ctx context.Context, tenantName string) ([]WiFiKey, error)
 	SetWiFiKeyStatus(ctx context.Context, tenantName, name string, status Status) error
 	DeleteWiFiKey(ctx context.Context, tenantName, name string) error
+
+	// Devices (ADR-0012 §3). Nothing is allocated, so no lock is needed, and
+	// nothing is sealed, because a device row carries no secret.
+	PutDevice(ctx context.Context, d Device) (Device, error)
+	GetDevice(ctx context.Context, tenantName, name string) (Device, error)
+	ListDevices(ctx context.Context, tenantName string) ([]Device, error)
+	DeleteDevice(ctx context.Context, tenantName, name string) error
 
 	// Extra records (ADR-0015 §13).
 	PutRecord(ctx context.Context, r ExtraRecord) error
@@ -246,6 +275,42 @@ func ValidPSK(s string) bool {
 		}
 	}
 	return true
+}
+
+// NormalizeMAC canonicalises a MAC to lowercase colon-separated form and
+// reports whether it was one at all. It accepts the three spellings hardware
+// and vendor tooling actually print - aa:bb:cc:dd:ee:ff, AA-BB-CC-DD-EE-FF and
+// aabbccddeeff - because a tenant copying an address off a label or a serial
+// console should not have to reformat it.
+//
+// This validates shape, nothing more. A well-formed MAC is still not evidence
+// of who is calling (ADR-0020 §2).
+func NormalizeMAC(s string) (string, bool) {
+	var hex []byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == ':' || c == '-':
+			continue
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f':
+			hex = append(hex, c)
+		case c >= 'A' && c <= 'F':
+			hex = append(hex, c+('a'-'A'))
+		default:
+			return "", false
+		}
+	}
+	if len(hex) != 12 {
+		return "", false
+	}
+	out := make([]byte, 0, 17)
+	for i := 0; i < 12; i += 2 {
+		if i > 0 {
+			out = append(out, ':')
+		}
+		out = append(out, hex[i], hex[i+1])
+	}
+	return string(out), true
 }
 
 // VNetSpec is one VNet of a tenant network: the bridge name workloads attach

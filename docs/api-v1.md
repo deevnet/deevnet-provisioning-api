@@ -217,6 +217,57 @@ Names beside the workloads' own (ADR-0015 §13), such as eds's `palette` and `li
 The address must be in the tenant's own subnet. The tenant's TSIG key still works for anything it
 would rather publish itself (ADR-0004).
 
+## Devices
+
+A tenant's registry of its own edge devices (ADR-0012 §3). The entry **is** the device's identity:
+an application-owned device takes no substrate host record, leases from its trust class's pool, and
+is named in its owner's own zone (ADR-0011 open question 3).
+
+`POST /v1/tenants/{name}/devices`
+
+```json
+{ "name": "stand-1", "trust_class": "iot", "mac": "aa:bb:cc:dd:ee:ff" }
+```
+
+- **The tenant chooses** the device's name, its trust class, and optionally records a MAC.
+- **`mac` is optional, and the substrate enforces nothing with it.** It is a label for the owner's
+  own inventory. A MAC is trivially spoofed on a shared segment, so binding to one stops nobody who
+  is trying, and it is explicitly not an authorization input (ADR-0020 §2). Two tenants may record
+  the same address. Supply it in any of `aa:bb:cc:dd:ee:ff`, `AA-BB-CC-DD-EE-FF` or `aabbccddeeff`;
+  it comes back lowercase and colon-separated.
+- **Calling it again converges.** The MAC is the one field that moves — swapping the hardware behind
+  a name is an inventory change, not a new device.
+- **A device gets no DHCP reservation and no substrate DNS name.** Publish whatever name you want in
+  your own zone with `records`, above.
+
+`201` with the entry. `400` for a trust class the site does not serve, and the error names the ones
+it does.
+
+| Route | Does |
+|---|---|
+| `GET /v1/tenants/{name}/devices` | the tenant's devices |
+| `GET /v1/tenants/{name}/devices/{device}` | one device |
+| `DELETE /v1/tenants/{name}/devices/{device}` | deregisters it |
+
+**A registry entry is identity, not authorization.** Registering a device grants it nothing. What a
+device is allowed to consume is carried by a credential it proves, at or above the transport layer
+(ADR-0020 §2), and that credential is a later layer — this resource issues none. Nor does a device
+reach its tenant's network: direct access never grants tenant network membership (ADR-0020 §3).
+
+**A device cannot change trust class.** Its SSID, its VLAN and any later service grants would all
+move at once, under an unchanged name. Register it under a new name instead.
+
+**Deregistering does not disconnect.** The device keeps whatever Wi-Fi key it was flashed with,
+because that key belongs to the tenant rather than to the device, and revoking it would strand every
+other device flashed with it. What deregistration removes is the device's standing to be issued
+anything of its own.
+
+**`iot_vendor` devices are registerable.** ADR-0012 §3 refuses them a *broker account*; it does not
+refuse them an identity.
+
+**This route needs no wireless controller.** Unlike Wi-Fi keys it writes to no backend, so a site
+without a controller still keeps a device registry.
+
 ## Wi-Fi keys
 
 A tenant's PPSK key for one IoT trust class (ADR-0012 §3). One key serves every device the tenant
