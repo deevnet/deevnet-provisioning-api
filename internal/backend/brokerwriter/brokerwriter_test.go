@@ -2,6 +2,7 @@ package brokerwriter
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -30,22 +31,68 @@ type fakeWriter struct {
 	replyRaw string // when set, sent instead of reply
 	exitCode uint32
 	stall    time.Duration // how long to wait before answering
+	// alsoOffer are further host key types this server presents, so a client
+	// that pins one key must also pin its algorithm to get that key back.
+	alsoOffer []string
 }
 
-func newFakeWriter(t *testing.T, clientPub ssh.PublicKey) *fakeWriter {
+func (f *fakeWriter) extraHostKeys(t *testing.T) []ssh.Signer {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
+	var out []ssh.Signer
+	for _, kind := range f.alsoOffer {
+		out = append(out, hostSigner(t, kind))
+	}
+	return out
+}
+
+func hostSigner(t *testing.T, kind string) ssh.Signer {
+	t.Helper()
+	var key any
+	switch kind {
+	case "rsa":
+		k, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key = k
+	case "ed25519":
+		_, sec, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key = sec
+	default:
+		t.Fatalf("unknown host key kind %q", kind)
 	}
 	signer, err := ssh.NewSignerFromKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return signer
+}
+
+func newFakeWriter(t *testing.T, clientPub ssh.PublicKey) *fakeWriter {
+	return newFakeWriterOf(t, clientPub, "rsa")
+}
+
+// The extra kinds are taken HERE and not set on the returned value, because
+// the server config is built in this function: a field set afterwards arrives
+// too late and the extra keys are never offered. The first version of the
+// multi-key test did exactly that and passed whether the client was correct
+// or not.
+
+// newFakeWriterOf pins a host key of the named kind. The kind matters: which
+// key a server presents is chosen from the CLIENT's preference list, so a test
+// only exercises that negotiation if the pinned key is NOT the client's first
+// choice.
+func newFakeWriterOf(t *testing.T, clientPub ssh.PublicKey, kind string, alsoOffer ...string) *fakeWriter {
+	t.Helper()
+	signer := hostSigner(t, kind)
 	f := &fakeWriter{
-		gotBody: make(chan []byte, 4),
-		hostKey: string(ssh.MarshalAuthorizedKey(signer.PublicKey())),
-		reply:   brokeracct.Response{Version: 1, OK: true, Username: "eds-lightd"},
+		alsoOffer: alsoOffer,
+		gotBody:   make(chan []byte, 4),
+		hostKey:   string(ssh.MarshalAuthorizedKey(signer.PublicKey())),
+		reply:     brokeracct.Response{Version: 1, OK: true, Username: "eds-lightd"},
 	}
 	cfg := &ssh.ServerConfig{
 		PublicKeyCallback: func(_ ssh.ConnMetadata, k ssh.PublicKey) (*ssh.Permissions, error) {
@@ -56,6 +103,12 @@ func newFakeWriter(t *testing.T, clientPub ssh.PublicKey) *fakeWriter {
 		},
 	}
 	cfg.AddHostKey(signer)
+	// A real sshd offers several host key types, and which one it presents is
+	// decided by the CLIENT's preference. The fake does the same, or the test
+	// would never exercise the negotiation that matters.
+	for _, extra := range f.extraHostKeys(t) {
+		cfg.AddHostKey(extra)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -299,4 +352,33 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// A host offers several host keys and the CLIENT's preference decides which
+// one it presents. Pinning one key therefore means pinning its algorithm too -
+// without that, a host that is exactly who it says it is answers with a
+// different key and the handshake fails as "host key mismatch", which reads
+// identically to an attack.
+//
+// This is a regression test: the first deployment of the writer failed this
+// way against a stock sshd offering ecdsa, ed25519 and rsa.
+func TestAHostOfferingSeveralKeysStillMatchesThePinnedOne(t *testing.T) {
+	priv, pub := clientKey(t)
+	// Pin the ed25519 key while the host ALSO offers rsa, which is the way
+	// round that reproduces the failure: the client's default preference picks
+	// rsa, so the pinned ed25519 key is never presented. The mirror of this
+	// test - pinning rsa and offering ed25519 - passes with or without the
+	// fix and proves nothing, which is how the first version of it was wrong.
+	// Pin ed25519 while the host also offers rsa. That is the direction that
+	// reproduces: x/crypto's default preference is ECDSA, then RSA, with
+	// ed25519 LAST, so an unconstrained client asks for rsa and never sees
+	// the pinned key. The mirror - pinning rsa, offering ed25519 - passes
+	// with or without the fix and proves nothing.
+	f := newFakeWriterOf(t, pub, "ed25519", "rsa")
+
+	c := dialFake(t, f, priv, f.hostKey)
+	if err := c.Put(context.Background(), account()); err != nil {
+		t.Fatalf("a host offering more than one key type was refused: %v", err)
+	}
+	<-f.gotBody
 }

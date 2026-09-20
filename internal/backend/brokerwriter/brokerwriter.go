@@ -193,7 +193,17 @@ func (c *Client) dial(ctx context.Context) (*ssh.Client, error) {
 		User:            c.cfg.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(c.signer)},
 		HostKeyCallback: ssh.FixedHostKey(c.hostKey),
-		Timeout:         c.cfg.ConnectTimeout,
+		// Pinning ONE key means accepting only that key's algorithm.
+		//
+		// A host usually has several host keys - ecdsa, ed25519 and rsa are
+		// the stock set - and it is the CLIENT's preference that decides which
+		// one the server presents. Without this, the server can answer with a
+		// different key than the one pinned and the handshake fails as
+		// "host key mismatch" on a host that is exactly who it says it is.
+		// That failure looks identical to an attack, which is the worst way
+		// for it to read.
+		HostKeyAlgorithms: []string{c.hostKey.Type()},
+		Timeout:           c.cfg.ConnectTimeout,
 	})
 	if err != nil {
 		_ = conn.Close()
