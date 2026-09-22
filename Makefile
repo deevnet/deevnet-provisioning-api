@@ -20,12 +20,18 @@ WRITER          := deevnet-broker-account
 WRITER_STAGE    := $(ARTIFACTS_ROOT)/binaries/$(WRITER)
 WRITER_FILE     := $(WRITER)-$(VERSION)
 
+# The log store's user writer (ADR-0027, CHG-0020). A second host binary, on a
+# different VM from the broker's, staged the same way.
+LOGWRITER       := deevnet-log-user
+LOGWRITER_STAGE := $(ARTIFACTS_ROOT)/binaries/$(LOGWRITER)
+LOGWRITER_FILE  := $(LOGWRITER)-$(VERSION)
+
 LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Version=$(VERSION) \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.Built=$(BUILT)
 
-.PHONY: default help test test-integration vet build build-writer image stage stage-writer clean
+.PHONY: default help test test-integration vet build build-writer build-log-writer image stage stage-writer stage-log-writer clean
 
 default: help
 
@@ -40,6 +46,10 @@ help:
 	@echo "          the broker account writer, a host binary for the messaging VM"
 	@echo "  stage-writer"
 	@echo "          build-writer, then install it under $(ARTIFACTS_ROOT)/binaries (sudo)"
+	@echo "  build-log-writer"
+	@echo "          the log store's user writer, a host binary for the observability store"
+	@echo "  stage-log-writer"
+	@echo "          build-log-writer, then install it under $(ARTIFACTS_ROOT)/binaries (sudo)"
 	@echo "  image   podman build $(IMAGE):$(VERSION)"
 	@echo "  stage   image, then save it under $(STAGE_DIR) (sudo)"
 	@echo "  clean   remove bin/"
@@ -94,6 +104,11 @@ build:
 build-writer:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(WRITER) ./cmd/$(WRITER)
 
+# Static for the same reasons, on the observability store rather than the
+# messaging VM.
+build-log-writer:
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(LOGWRITER) ./cmd/$(LOGWRITER)
+
 image:
 	podman build \
 	  --build-arg VERSION=$(VERSION) \
@@ -122,6 +137,13 @@ stage-writer: build-writer
 	sudo install -o nginx -g nginx -m 0644 bin/$(WRITER) $(WRITER_STAGE)/$(WRITER_FILE)
 	sudo ln -sfn $(WRITER_FILE) $(WRITER_STAGE)/$(WRITER)-latest
 	@echo "staged $(WRITER_STAGE)/$(WRITER_FILE)"
+
+stage-log-writer: build-log-writer
+	@case "$(VERSION)" in *-dirty|dev) echo "refusing to stage VERSION=$(VERSION); commit and tag first" >&2; exit 1;; esac
+	sudo install -d -o nginx -g nginx -m 0755 $(LOGWRITER_STAGE)
+	sudo install -o nginx -g nginx -m 0644 bin/$(LOGWRITER) $(LOGWRITER_STAGE)/$(LOGWRITER_FILE)
+	sudo ln -sfn $(LOGWRITER_FILE) $(LOGWRITER_STAGE)/$(LOGWRITER)-latest
+	@echo "staged $(LOGWRITER_STAGE)/$(LOGWRITER_FILE)"
 
 clean:
 	rm -rf bin

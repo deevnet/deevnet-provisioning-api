@@ -48,9 +48,15 @@ func (r CreateRequest) suppliesSecrets() bool {
 // Issued are the plaintext secrets a create call hands back. APIToken is empty
 // when the call neither generated nor received one: the API only keeps its hash.
 type Issued struct {
-	TSIGSecret  string
-	StateSecret string
-	APIToken    string
+	// LogIngestToken and LogReadToken are the tenant's credentials for the log
+	// store (ADR-0027). Unlike the API token they are readable afterwards, so
+	// reconcile returns them too: that is how a tenant created before the store
+	// existed gets hold of them without being rebuilt.
+	LogIngestToken string
+	LogReadToken   string
+	TSIGSecret     string
+	StateSecret    string
+	APIToken       string
 }
 
 // Result is a tenant after a create, restore, resume or reconcile.
@@ -82,6 +88,10 @@ type Service struct {
 	// which is a legitimate site and the state every site was in before
 	// CHG-0015 - the routes then refuse with a reason rather than panicking.
 	BrokerWriter BrokerWriter
+	// LogWriter maintains each tenant's users in the log store (ADR-0027,
+	// CHG-0020). Nil when the site has no store, and then a tenant simply
+	// has no log tokens.
+	LogWriter LogWriter
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.
@@ -266,7 +276,10 @@ func (s *Service) Reconcile(ctx context.Context, name string) (Result, error) {
 	return Result{
 		Record:  rec,
 		Outcome: OutcomeReconciled,
-		Issued:  Issued{TSIGSecret: rec.Secrets.TSIG, StateSecret: rec.Secrets.State},
+		// The log tokens ride along: they are readable, and a reconcile is how a
+		// tenant created before the store existed is handed them.
+		Issued: Issued{TSIGSecret: rec.Secrets.TSIG, StateSecret: rec.Secrets.State,
+			LogIngestToken: rec.Secrets.LogIngest, LogReadToken: rec.Secrets.LogRead},
 	}, err
 }
 
@@ -350,6 +363,13 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		{StepDNS, func() error { return s.DNS.Remove(ctx, s.dnsTenant(rec)) }},
 		{StepState, func() error { return s.State.Remove(ctx, rec.Name) }},
 	}
+	if s.LogWriter != nil {
+		steps = append([]struct {
+			name string
+			run  func() error
+		}{{StepLogStore, func() error { return s.removeLogTokens(ctx, rec) }}}, steps...)
+	}
+
 	for _, st := range steps {
 		if err := st.run(); err != nil {
 			s.recordStep(ctx, name, st.name, err)
@@ -632,6 +652,18 @@ func (s *Service) ensure(ctx context.Context, rec Record) (Record, error) {
 		// tenant's own resources depend on it rather than the other way round.
 		{StepNetwork, func() error { return s.network(ctx, rec) }},
 	}
+	// The tenant's users in the log store (ADR-0027, CHG-0020), before the
+	// fabric step for the same reason as the others: the tenant's own
+	// resources are the last thing built. Added only when the site has a
+	// store, so a site without one records no step rather than a step that
+	// did nothing.
+	if s.LogWriter != nil {
+		steps = append(steps, struct {
+			name string
+			run  func() error
+		}{StepLogStore, func() error { return s.ensureLogTokens(ctx, rec) }})
+	}
+
 	for _, st := range steps {
 		err := st.run()
 		s.recordStep(ctx, rec.Name, st.name, err)
@@ -764,9 +796,20 @@ func pickIndex(name string, requested int, held map[int]string, claims []Claim) 
 }
 
 func (s *Service) secretsFor(req CreateRequest) (Issued, Secrets, error) {
+	// The log tokens are minted here whichever branch runs. They are not part
+	// of the restore contract: a tenant restoring itself supplies the three
+	// secrets the API cannot re-derive, and a log token is not one of those -
+	// the store is told what the token is, so issuing a fresh pair and writing
+	// it to the store is always correct and never loses anything.
+	logIngest, logRead, err := logTokens()
+	if err != nil {
+		return Issued{}, Secrets{}, err
+	}
 	if req.suppliesAllSecrets() {
-		return Issued{TSIGSecret: req.TSIGSecret, StateSecret: req.StateSecret, APIToken: req.APIToken},
-			Secrets{TSIG: req.TSIGSecret, State: req.StateSecret, APITokenHash: HashToken(req.APIToken)},
+		return Issued{TSIGSecret: req.TSIGSecret, StateSecret: req.StateSecret, APIToken: req.APIToken,
+				LogIngestToken: logIngest, LogReadToken: logRead},
+			Secrets{TSIG: req.TSIGSecret, State: req.StateSecret, APITokenHash: HashToken(req.APIToken),
+				LogIngest: logIngest, LogRead: logRead},
 			nil
 	}
 	tsigRaw := make([]byte, 32)
@@ -784,9 +827,24 @@ func (s *Service) secretsFor(req CreateRequest) (Issued, Secrets, error) {
 		return Issued{}, Secrets{}, err
 	}
 	tsig := base64.StdEncoding.EncodeToString(tsigRaw)
-	return Issued{TSIGSecret: tsig, StateSecret: state, APIToken: token},
-		Secrets{TSIG: tsig, State: state, APITokenHash: HashToken(token)},
+	return Issued{TSIGSecret: tsig, StateSecret: state, APIToken: token,
+			LogIngestToken: logIngest, LogReadToken: logRead},
+		Secrets{TSIG: tsig, State: state, APITokenHash: HashToken(token),
+			LogIngest: logIngest, LogRead: logRead},
 		nil
+}
+
+// logTokens mints a tenant's pair. 32 bytes in hex is 64 characters: opaque,
+// and made only of characters that cannot end a YAML scalar early, which is
+// what the store's configuration file is.
+func logTokens() (ingest, read string, err error) {
+	if ingest, err = randomHex(32); err != nil {
+		return "", "", err
+	}
+	if read, err = randomHex(32); err != nil {
+		return "", "", err
+	}
+	return ingest, read, nil
 }
 
 // Admission is an admitted tenant name and the single-use token that creates it.

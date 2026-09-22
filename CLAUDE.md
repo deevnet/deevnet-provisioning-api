@@ -9,8 +9,8 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 **provisioning-only**. Nothing at runtime (devices, brokers, the AP, tenant workloads) depends on it
 being up.
 
-It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry and
-their MQTT broker accounts (`docs/api-v1.md`).
+It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry,
+their MQTT broker accounts and their log store tokens (`docs/api-v1.md`).
 
 The repository name says what the service is for; the service itself, its binary, image and
 container keep the short name `deevnet-api`, which is what the `deevnet.mgmt` `deevnet_api` role
@@ -56,8 +56,17 @@ make stage    # save the image under the Builder's artifact root (needs a clean,
   through a root-only env file written by the `deevnet_api` Ansible role.
 - **Never put secrets or connection errors in a response body.** Readiness logs the reason and
   returns a fixed shape. A failed backend step names the step only; its error goes to the log and
-  `tenant_steps`. Secrets appear only in create responses. Tests assert all of this.
+  `tenant_steps`. Secrets appear only in create and restore responses - and the log tokens also on a
+  reconcile, because unlike the API token they are readable and a tenant created before the store
+  existed has to be handed them somehow. Tests assert all of this.
 - **`/healthz` must not touch the database.** It is liveness. Readiness is `/readyz`.
+- **Two writers, two hosts, two keys.** Broker accounts go to the messaging VM as a bcrypt hash;
+  log tokens go to the observability store as the token itself, because vmauth compares what it was
+  configured with. Both are one request and one answer to a program pinned with `command=`. Neither
+  key may be reused for the other.
+- **The log store's `auth.yml` has two authors.** Ansible owns `base.json`, the writer owns
+  `users.d/<tenant>.json`, and `deevnet-log-user` renders the file from both. Don't make either side
+  write `auth.yml` directly.
 - **Images are pushed, not pulled.** The provisioning VM sits on Platform, which has no route back
   to the Builder's artifact server under the zone policy. `make stage` writes the tarball where
   the role reads it on the control node.

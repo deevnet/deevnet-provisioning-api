@@ -83,7 +83,16 @@ func (p *Postgres) seal(ctx context.Context, s tenant.Secrets) (tenant.Secrets, 
 	if s.TSIG, err = p.sealer.Seal(ctx, s.TSIG); err != nil {
 		return s, err
 	}
-	s.State, err = p.sealer.Seal(ctx, s.State)
+	if s.State, err = p.sealer.Seal(ctx, s.State); err != nil {
+		return s, err
+	}
+	// The log tokens are sealed like the others. They differ in what a lost one
+	// costs: the store is told what the token is, so an unreadable one is
+	// re-minted and re-written rather than needing the tenant to supply it.
+	if s.LogIngest, err = p.sealer.Seal(ctx, s.LogIngest); err != nil {
+		return s, err
+	}
+	s.LogRead, err = p.sealer.Seal(ctx, s.LogRead)
 	return s, err
 }
 
@@ -103,6 +112,11 @@ func (p *Postgres) open(ctx context.Context, s tenant.Secrets) (tenant.Secrets, 
 	s.Unreadable = bad
 	s.State, bad = p.openOne(ctx, s.State, "state")
 	s.Unreadable = s.Unreadable || bad
+	// A log token that will not open is NOT reported as Unreadable: that flag
+	// tells a tenant to supply its secrets again, and a log token is not one a
+	// tenant can supply. An empty one is re-minted on the next ensure.
+	s.LogIngest, _ = p.openOne(ctx, s.LogIngest, "log-ingest")
+	s.LogRead, _ = p.openOne(ctx, s.LogRead, "log-read")
 	return s, nil
 }
 
@@ -176,12 +190,13 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 	return nil
 }
 
-const tenantColumns = `name, idx, status, tsig_secret, state_secret, api_token_hash, created_at, updated_at`
+const tenantColumns = `name, idx, status, tsig_secret, state_secret, api_token_hash, log_ingest_token, log_read_token, created_at, updated_at`
 
 func scanTenant(row pgx.Row) (tenant.Record, error) {
 	var r tenant.Record
 	var status string
-	err := row.Scan(&r.Name, &r.Index, &status, &r.Secrets.TSIG, &r.Secrets.State, &r.Secrets.APITokenHash, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.Name, &r.Index, &status, &r.Secrets.TSIG, &r.Secrets.State, &r.Secrets.APITokenHash,
+		&r.Secrets.LogIngest, &r.Secrets.LogRead, &r.CreatedAt, &r.UpdatedAt)
 	r.Status = tenant.Status(status)
 	return r, err
 }
@@ -260,10 +275,12 @@ func (p *Postgres) Create(ctx context.Context, name string, secrets tenant.Secre
 			return err
 		}
 		rec, err = scanTenant(tx.QueryRow(ctx,
-			`INSERT INTO tenants (name, idx, status, tsig_secret, state_secret, api_token_hash)
-			 VALUES ($1, $2, $3, $4, $5, $6)
+			`INSERT INTO tenants (name, idx, status, tsig_secret, state_secret, api_token_hash,
+			                      log_ingest_token, log_read_token)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			 RETURNING `+tenantColumns,
-			name, n, string(tenant.StatusProvisioning), sealed.TSIG, sealed.State, sealed.APITokenHash))
+			name, n, string(tenant.StatusProvisioning), sealed.TSIG, sealed.State, sealed.APITokenHash,
+			sealed.LogIngest, sealed.LogRead))
 		rec.Secrets = secrets
 		return err
 	})
@@ -284,8 +301,10 @@ func (p *Postgres) SetSecrets(ctx context.Context, name string, s tenant.Secrets
 		return fmt.Errorf("sealing secrets of %s: %w", name, err)
 	}
 	return p.execOne(ctx,
-		`UPDATE tenants SET tsig_secret = $2, state_secret = $3, api_token_hash = $4, updated_at = now() WHERE name = $1`,
-		name, s.TSIG, s.State, s.APITokenHash)
+		`UPDATE tenants SET tsig_secret = $2, state_secret = $3, api_token_hash = $4,
+		                    log_ingest_token = $5, log_read_token = $6, updated_at = now()
+		  WHERE name = $1`,
+		name, s.TSIG, s.State, s.APITokenHash, s.LogIngest, s.LogRead)
 }
 
 func (p *Postgres) RecordStep(ctx context.Context, name, step string, stepErr error) error {

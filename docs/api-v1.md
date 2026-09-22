@@ -136,17 +136,33 @@ they reach the tenant's state. `api_token` is present when this call generated o
     "access_key": "tdemo",
     "secret_key": "…"
   },
+  "log": {
+    "endpoint": "https://dv02obs001v01.mobile.deevnet.net:8427",
+    "account_id": 2,
+    "select_header": "X-Deevnet-Partition",
+    "ingest_token": "…",
+    "read_token": "…"
+  },
   "api_token": "…",
   "steps": [
     { "name": "dns", "ok": true, "updated_at": "…" },
     { "name": "resolver", "ok": true, "updated_at": "…" },
-    { "name": "state", "ok": true, "updated_at": "…" }
+    { "name": "state", "ok": true, "updated_at": "…" },
+    { "name": "log-store", "ok": true, "updated_at": "…" }
   ]
 }
 ```
 
 Step error text is never returned: it can name backend hosts. It is in the log and in the
 `tenant_steps` table.
+
+`log` is the tenant's access to the log store (ADR-0027). `account_id` is its partition family:
+project 0 is what its own workloads ship, 1 what the substrate publishes about it, and 2 its
+devices' logs arriving over MQTT. A reader selects between them with the `select_header`, for
+example `X-Deevnet-Partition: 2-1`; without it a read returns project 0. The two tokens appear
+under the same rule as the other secrets, and **also on a reconcile**, which is how a tenant created
+before the store existed is handed them. `endpoint` and `log-store` are absent at a site with no
+store.
 
 ## Read
 

@@ -93,6 +93,11 @@ type Site struct {
 	StateEndpoint string
 	StateBucket   string
 
+	// The log store tenants are offered (ADR-0027). Optional: a site without
+	// one issues no log tokens, and the tenant view simply carries no
+	// endpoint. It is not validated below for that reason.
+	LogEndpoint string
+
 	// TrustClasses this site serves, by name. Empty means the site issues no
 	// Wi-Fi keys, which is a legitimate site: one without a wireless
 	// controller, which is what was deployed before CHG-0013.
