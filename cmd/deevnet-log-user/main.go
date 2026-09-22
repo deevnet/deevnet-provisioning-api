@@ -5,7 +5,10 @@
 //   - by sshd, as a forced command, with one logauth.Request on stdin. That is
 //     the Deevnet API adding or removing one tenant's users (CHG-0020).
 //   - by Ansible, as "--render", after it has written the base file. That is
-//     the substrate re-asserting the store's configuration.
+//     the substrate re-asserting the store's configuration. "--render
+//     --no-reload" renders without asking vmauth to re-read it, which is how
+//     the file is put in place before vmauth has started: it will not start
+//     without one, and it cannot be reloaded before it is running.
 //
 // Neither owns auth.yml. Ansible owns base.json, this program owns
 // users.d/<tenant>.json, and auth.yml is generated from both - so an Ansible
@@ -82,11 +85,17 @@ type tenantFile struct {
 
 func main() {
 	render := len(os.Args) > 1 && os.Args[1] == "--render"
+	noReload := false
+	for _, a := range os.Args[1:] {
+		if a == "--no-reload" {
+			noReload = true
+		}
+	}
 
 	if render {
 		// Ansible's path: no request, no response document, an exit status and
 		// whatever is on stderr.
-		if err := renderOnly(); err != nil {
+		if err := renderOnly(noReload); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -104,17 +113,14 @@ func main() {
 	}
 }
 
-func renderOnly() error {
+func renderOnly(noReload bool) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout())
 	defer cancel()
-	if err := regenerate(ctx, cfg); err != nil {
-		return err
-	}
-	return nil
+	return regenerate(ctx, cfg, noReload)
 }
 
 // run does the work and always produces a Response. The error text it returns
@@ -177,7 +183,9 @@ func run() logauth.Response {
 		}
 	}
 
-	if err := regenerate(ctx, cfg); err != nil {
+	// A request always reloads: the API must not be told a token is live while
+	// the store is still serving the previous configuration.
+	if err := regenerate(ctx, cfg, false); err != nil {
 		fmt.Fprintln(os.Stderr, "regenerating:", err)
 		resp.Message = "the store's configuration could not be regenerated"
 		return resp
@@ -191,7 +199,7 @@ func run() logauth.Response {
 // regenerate renders auth.yml from the base file and every tenant file, then
 // asks vmauth to reload. The rendered file is written to a temporary name and
 // renamed, so a reader never sees a half-written configuration.
-func regenerate(ctx context.Context, cfg config) error {
+func regenerate(ctx context.Context, cfg config, noReload bool) error {
 	b, err := loadBase(cfg.Base)
 	if err != nil {
 		return err
@@ -206,6 +214,9 @@ func regenerate(ctx context.Context, cfg config) error {
 	}
 	if err := writeFile(cfg.AuthFile, doc, 0o640); err != nil {
 		return fmt.Errorf("writing %s: %w", cfg.AuthFile, err)
+	}
+	if noReload {
+		return nil
 	}
 	return reload(ctx, cfg.ReloadURL)
 }
