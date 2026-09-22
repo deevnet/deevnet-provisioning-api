@@ -122,6 +122,21 @@ type stateView struct {
 	SecretKey string `json:"secret_key,omitempty"`
 }
 
+// logView is the tenant's access to the log store (ADR-0027). The endpoint and
+// the partitions are told to every caller; the tokens appear only when they are
+// issued, like the TSIG secret and the state key above.
+//
+// Partitions are named here so a tenant does not have to derive them from its
+// index: 0 is what its own workloads ship, 1 what the substrate publishes about
+// it, and 2 its devices' logs from MQTT.
+type logView struct {
+	Endpoint     string `json:"endpoint,omitempty"`
+	AccountID    int    `json:"account_id"`
+	IngestToken  string `json:"ingest_token,omitempty"`
+	ReadToken    string `json:"read_token,omitempty"`
+	SelectHeader string `json:"select_header,omitempty"`
+}
+
 // stepView leaves out the step's error text: it can name backend hosts, and it
 // is in the log and the database for the operator who needs it.
 type stepView struct {
@@ -141,6 +156,7 @@ type tenantView struct {
 	Fabric    fabricView  `json:"fabric"`
 	DNS       dnsView     `json:"dns"`
 	State     stateView   `json:"state"`
+	Log       logView     `json:"log"`
 	APIToken  string      `json:"api_token,omitempty"`
 	// SecretsStored is false when the API holds secrets for this tenant that it
 	// can no longer read - a rebuilt or rotated Transit key (ADR-0016 §6). The
@@ -178,6 +194,14 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 			KeyPrefix: "tenants/" + rec.Name + "/",
 			AccessKey: rec.Name,
 		},
+		Log: logView{
+			Endpoint:  site.LogEndpoint,
+			AccountID: rec.Index,
+			// How a reader asks for a partition other than its own workloads':
+			// vmauth matches this header and then sets the store's own headers
+			// itself, so it selects only among the partitions this tenant has.
+			SelectHeader: "X-Deevnet-Partition",
+		},
 		SecretsStored: !rec.Secrets.Unreadable,
 		Steps:         []stepView{},
 	}
@@ -185,6 +209,8 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 		v.DNS.TSIGSecret = issued.TSIGSecret
 		v.State.SecretKey = issued.StateSecret
 		v.APIToken = issued.APIToken
+		v.Log.IngestToken = issued.LogIngestToken
+		v.Log.ReadToken = issued.LogReadToken
 	}
 	for _, s := range rec.Steps {
 		v.Steps = append(v.Steps, stepView{Name: s.Name, OK: s.OK, UpdatedAt: s.UpdatedAt})
@@ -290,7 +316,16 @@ func (h *tenantHandlers) reconcile(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, h.view(res.Record, res.Outcome, nil))
+	// The log tokens, and only those. A reconcile deliberately returns no TSIG
+	// secret and no state key: the tenant's own state holds those, and handing
+	// them back would make a repair look like a reissue. The log tokens are
+	// different - the store is told what they are, the API can read them back,
+	// and a tenant created before the store existed has no other way to be
+	// handed them (ADR-0027, CHG-0020).
+	writeJSON(w, http.StatusOK, h.view(res.Record, res.Outcome, &tenant.Issued{
+		LogIngestToken: res.Issued.LogIngestToken,
+		LogReadToken:   res.Issued.LogReadToken,
+	}))
 }
 
 func (h *tenantHandlers) egress(w http.ResponseWriter, r *http.Request) {

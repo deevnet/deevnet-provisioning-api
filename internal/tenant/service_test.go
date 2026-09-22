@@ -56,8 +56,8 @@ func TestCreateAllocatesLowestFreeIndexAndEnsuresEveryBackend(t *testing.T) {
 	if string(rec.Secrets.APITokenHash) != string(tenant.HashToken(res.Issued.APIToken)) {
 		t.Error("the registry does not hold the token's hash")
 	}
-	if len(rec.Steps) != 4 {
-		t.Errorf("steps recorded = %v, want dns, resolver, state and network", rec.Steps)
+	if len(rec.Steps) != 5 {
+		t.Errorf("steps recorded = %v, want dns, resolver, state, log-store and network", rec.Steps)
 	}
 	net, ok := b.Networks["tdemo"]
 	if !ok || net.VRFVNI != 10002 || net.Subnet != "10.20.130.0/24" || net.VNets[0].ID != "tdemo0" || net.VNets[0].Tag != 20020 {

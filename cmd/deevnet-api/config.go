@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/brokerwriter"
+	"github.com/deevnet/deevnet-provisioning-api/internal/backend/logwriter"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/minio"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/omada"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/opnsense"
@@ -106,6 +107,28 @@ var brokerCredentials = []string{
 	"broker_writer_key",
 }
 
+// logEnv is what the API needs to maintain tenants' users in the log store
+// (ADR-0027; CHG-0020). DEEVNET_LOG_WRITER_ADDR turns it on; the rest is then
+// required. Optional for the same reason as the broker's: a site with no log
+// store is a legitimate site, and a tenant there simply has no log tokens.
+//
+// DEEVNET_LOG_ENDPOINT is what a tenant is TOLD to send logs to, which is not
+// the same thing as where the writer lives: the writer is reached over SSH, and
+// the endpoint is the store's HTTPS port. A site can have one without the
+// other, so the endpoint is not required by this gate.
+var logEnv = []string{
+	"DEEVNET_LOG_WRITER_ADDR",
+	"DEEVNET_LOG_WRITER_USER",
+	"DEEVNET_LOG_HOST_KEY",
+}
+
+// logCredentials are checked only when DEEVNET_LOG_WRITER_ADDR is set. A
+// separate key from the broker's: revoking one must not revoke the other, and
+// the two writers are on different hosts with different blast radii.
+var logCredentials = []string{
+	"log_writer_key",
+}
+
 // openbaoEnv is what the API needs to reach OpenBao. OPENBAO_ADDR turns
 // OpenBao on; the rest are then required.
 var openbaoEnv = []string{
@@ -180,7 +203,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		// The optional ones are read here too, so a local run without OpenBao
 		// can still reach a controller. They are not added to the required
 		// check below.
-		for _, k := range append(append(append([]string{}, credentials...), omadaCredentials...), brokerCredentials...) {
+		for _, k := range append(append(append(append([]string{}, credentials...), omadaCredentials...), brokerCredentials...), logCredentials...) {
 			creds[k] = getenv(strings.ToUpper(k))
 		}
 	}
@@ -226,6 +249,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		DNSApexNS:         getenv("DEEVNET_DNS_APEX_NS"),
 		DNSUpdateFrom:     updateFrom,
 		StateEndpoint:     getenv("DEEVNET_STATE_ENDPOINT"),
+		LogEndpoint:       getenv("DEEVNET_LOG_ENDPOINT"),
 		StateBucket:       getenv("DEEVNET_STATE_BUCKET"),
 		ResolverForwardTo: getenv("DEEVNET_RESOLVER_FORWARD_TO"),
 		WorkloadResolver:  getenv("DEEVNET_WORKLOAD_RESOLVER"),
@@ -257,6 +281,16 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		for _, k := range brokerCredentials {
 			if creds[k] == "" {
 				return wiring{}, fmt.Errorf("DEEVNET_BROKER_WRITER_ADDR is set, but %s is missing from the backend credentials", k)
+			}
+		}
+	}
+	if getenv("DEEVNET_LOG_WRITER_ADDR") != "" {
+		if missing := empty(getenv, logEnv); len(missing) > 0 {
+			return wiring{}, fmt.Errorf("DEEVNET_LOG_WRITER_ADDR is set, but these are empty: %s", strings.Join(missing, ", "))
+		}
+		for _, k := range logCredentials {
+			if creds[k] == "" {
+				return wiring{}, fmt.Errorf("DEEVNET_LOG_WRITER_ADDR is set, but %s is missing from the backend credentials", k)
 			}
 		}
 	}
@@ -340,6 +374,33 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			return wiring{}, fmt.Errorf("broker account writer: %w", err)
 		}
 		svc.BrokerWriter = w
+	}
+
+	// The log store's user writer. Same shape as the broker's, on a host on the
+	// API's own segment: what crosses here is the tenant's tokens themselves,
+	// so the host key is pinned and there is no fallback that would connect
+	// without one.
+	if getenv("DEEVNET_LOG_WRITER_ADDR") != "" {
+		connect, err := durationEnv(getenv, "DEEVNET_LOG_CONNECT_TIMEOUT", 10*time.Second)
+		if err != nil {
+			return wiring{}, err
+		}
+		session, err := durationEnv(getenv, "DEEVNET_LOG_SESSION_TIMEOUT", 30*time.Second)
+		if err != nil {
+			return wiring{}, err
+		}
+		w, err := logwriter.New(logwriter.Config{
+			Addr:           getenv("DEEVNET_LOG_WRITER_ADDR"),
+			User:           getenv("DEEVNET_LOG_WRITER_USER"),
+			PrivateKey:     []byte(creds["log_writer_key"]),
+			HostKey:        getenv("DEEVNET_LOG_HOST_KEY"),
+			ConnectTimeout: connect,
+			SessionTimeout: session,
+		})
+		if err != nil {
+			return wiring{}, fmt.Errorf("log store user writer: %w", err)
+		}
+		svc.LogWriter = w
 	}
 	return wiring{tenants: svc, sealer: sealer, site: site}, nil
 }

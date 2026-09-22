@@ -29,7 +29,28 @@ const (
 	StepNetwork  = "network"
 	StepWiFiKey  = "wifi-key"
 	StepBroker   = "broker-account"
+	StepLogStore = "log-store"
 )
+
+// LogTenant is one tenant's users in the log store. The partitions are not in
+// it: both ends derive them from the index, so a caller cannot name another
+// tenant's partition (ADR-0027 §2).
+type LogTenant struct {
+	Name        string
+	Index       int
+	IngestToken string
+	ReadToken   string
+}
+
+// LogWriter maintains a tenant's users in the log store.
+//
+// Like BrokerWriter, nil is legal: a site with no log store is a legitimate
+// site, and the tenant then simply has no log tokens rather than failing to be
+// created.
+type LogWriter interface {
+	Put(ctx context.Context, t LogTenant) error
+	Remove(ctx context.Context, name string, index int) error
+}
 
 // Secrets are what the API keeps for a tenant. The TSIG and state secrets are
 // kept usable because the API has to re-ensure them after a backend rebuild;
@@ -38,6 +59,13 @@ type Secrets struct {
 	TSIG         string
 	State        string
 	APITokenHash []byte
+	// LogIngest writes the tenant's own log partition; LogRead reads its three
+	// (ADR-0027 §2). Both are kept usable, like TSIG and State and unlike the
+	// API token, because the store is configured with the token itself: vmauth
+	// compares what it was given, so a hash would be of no use to it. They are
+	// sealed in the same column family and restored the same way.
+	LogIngest string
+	LogRead   string
 	// Unreadable is set when a stored secret could not be opened - which is what
 	// a rebuilt or rotated Transit key leaves behind (ADR-0016 §6). It is not the
 	// same as a secret being empty, and the difference is the whole point: a

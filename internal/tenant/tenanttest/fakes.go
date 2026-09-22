@@ -464,6 +464,14 @@ type Backends struct {
 	// ambiguous failure the retry path exists for.
 	BrokerErr error
 
+	// LogTenants is keyed by tenant name: what the log store was told this
+	// tenant's users are (ADR-0027). A test can assert the index and the two
+	// tokens really crossed.
+	LogTenants map[string]tenant.LogTenant
+	// LogErr, when set, is returned by every Put and Remove: the store being
+	// unreachable while a tenant is applying.
+	LogErr error
+
 	FailDNS, FailResolver, FailState, FailFabric error
 	FailNetwork, FailCompute, FailWireless       error
 }
@@ -478,6 +486,7 @@ func NewBackends() *Backends {
 		States:         map[string]tenant.StateTenant{},
 		WiFiKeys:       map[string]tenant.WiFiKeySpec{},
 		BrokerAccounts: map[string]tenant.BrokerAccount{},
+		LogTenants:     map[string]tenant.LogTenant{},
 	}
 }
 
@@ -749,6 +758,31 @@ func (w *brokerWriter) Remove(_ context.Context, tenantName, name string) error 
 	return nil
 }
 
+type logWriter struct{ b *Backends }
+
+// LogWriter returns a stand-in for the program on the observability store.
+func (b *Backends) LogWriter() tenant.LogWriter { return &logWriter{b} }
+
+func (w *logWriter) Put(_ context.Context, lt tenant.LogTenant) error {
+	if w.b.LogErr != nil {
+		return w.b.LogErr
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	w.b.LogTenants[lt.Name] = lt
+	return nil
+}
+
+func (w *logWriter) Remove(_ context.Context, name string, _ int) error {
+	if w.b.LogErr != nil {
+		return w.b.LogErr
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	delete(w.b.LogTenants, name)
+	return nil
+}
+
 func NewService() (*tenant.Service, *Store, *Backends) {
 	st := NewStore()
 	b := NewBackends()
@@ -767,6 +801,7 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		Compute:      b.Compute(),
 		Wireless:     b.Wireless(),
 		BrokerWriter: b.BrokerWriter(),
+		LogWriter:    b.LogWriter(),
 		Tokens:       tokens,
 		Enroller:     &Enroller{},
 	}, st, b
