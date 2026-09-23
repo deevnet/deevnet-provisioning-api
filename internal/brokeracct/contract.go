@@ -294,3 +294,103 @@ func PrefixPatterns(tenantName, field string, relatives []string) ([]string, err
 	}
 	return out, nil
 }
+
+// --- The reserved log level (ADR-0027 §3) -----------------------------------
+//
+// A device publishes its log messages under one level, immediately after the
+// tenant's prefix:
+//
+//	<tenant>/log/<device>
+//
+// The substrate's bridge subscribes to `+/log/#` across every tenant and
+// carries what it finds into that tenant's (index, 2) partition. That makes
+// this level substrate-facing in a way no other level is, so the API reserves
+// it: a grant here means "these lines become that tenant's device logs", and
+// nothing else.
+//
+// The rules, from ADR-0027 §3:
+//
+//   - A DEVICE account may publish exactly its own `<tenant>/log/<device>`.
+//     Not a wildcard, not another device's name - a device that could publish
+//     under a name it does not own could write log lines attributed to another
+//     device, and the store has no way to tell.
+//   - A device account may not SUBSCRIBE anywhere in the log space. The ADR
+//     names this case: a device has no reason to read its tenant's logs, and
+//     an account that both writes and reads them is a way to launder content
+//     between devices.
+//   - A WORKLOAD account (no device) may subscribe to the log space - its own
+//     tenant's, which is all the prefix allows - and may not publish there.
+//     A workload with logs of its own ships them to (index, 0) with the
+//     tenant's ingest token; it does not put them on the broker for the bridge
+//     to pick up.
+//
+// This is enforced HERE, in the API, and not in the account writer. The writer
+// is not told which device an account belongs to, and telling it would widen
+// its contract for one rule. What the writer still enforces independently is
+// the tenant prefix, which is the rule that keeps tenants apart.
+
+// LogLevel is the reserved level. It is one word in one place: the bridge's
+// subscription, the ADR and this check all mean the same level.
+const LogLevel = "log"
+
+// CheckLogGrants applies the reservation to one account's ABSOLUTE patterns -
+// the prefixed form, as PrefixPatterns returns it.
+//
+// device is the device the account belongs to, empty for a workload account.
+func CheckLogGrants(tenantName, device string, publish, subscribe []string) error {
+	own := tenantName + "/" + LogLevel + "/" + device
+
+	for _, p := range publish {
+		if !touchesLog(tenantName, p) {
+			continue
+		}
+		if device == "" {
+			return fmt.Errorf("only a device account may publish under %s/, and this account has no device (ADR-0027 §3)", LogLevel)
+		}
+		if p != own {
+			// The pattern is not echoed: it came from a caller, and an error
+			// message is not a place to reflect a caller's string back.
+			return fmt.Errorf("a device account may publish only %s/%s under the reserved %s level", LogLevel, device, LogLevel)
+		}
+	}
+
+	for _, s := range subscribe {
+		if !touchesLog(tenantName, s) {
+			continue
+		}
+		if device != "" {
+			return fmt.Errorf("a device account may not subscribe under the reserved %s level (ADR-0027 §3)", LogLevel)
+		}
+	}
+	return nil
+}
+
+// touchesLog reports whether a filter could match ANY topic at or under
+// <tenant>/log/.
+//
+// Not a prefix test: `eds/#` and `eds/+/x` reach into the log space without
+// spelling it, and a rule that only looked for the literal string would pass
+// them. This asks the question the broker will answer at subscribe time -
+// could this filter and that space ever meet - which is the only form of the
+// question that cannot be worked around by writing the filter differently.
+func touchesLog(tenantName, filter string) bool {
+	levels := strings.Split(filter, "/")
+	for i, want := range []string{tenantName, LogLevel} {
+		if i >= len(levels) {
+			// The filter ran out: it is shorter than <tenant>/log, so it
+			// matches nothing in that space.
+			return false
+		}
+		switch levels[i] {
+		case "#":
+			// Matches this level and everything below it.
+			return true
+		case "+", want:
+		default:
+			return false
+		}
+	}
+	// Both levels matched. Whatever follows - more levels, a wildcard, or
+	// nothing at all - is inside the reserved space.
+	return true
+}

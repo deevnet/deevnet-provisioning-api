@@ -271,3 +271,127 @@ func TestPrefixedPatternsSatisfyTheWriter(t *testing.T) {
 		t.Fatalf("the writer refused what the API prefixed: %v", err)
 	}
 }
+
+// --- The reserved log level (ADR-0027 §3) -----------------------------------
+
+func TestADeviceMayPublishItsOwnLogTopic(t *testing.T) {
+	err := CheckLogGrants("mabell", "ma-bell-gw-01",
+		[]string{"mabell/log/ma-bell-gw-01", "mabell/phone/ma-bell-gw-01/state"},
+		nil)
+	if err != nil {
+		t.Fatalf("the shape ADR-0027 §3 describes was refused: %v", err)
+	}
+}
+
+func TestTheLogLevelIsReserved(t *testing.T) {
+	cases := []struct {
+		name      string
+		device    string
+		publish   []string
+		subscribe []string
+		want      string
+	}{
+		{
+			// The case the ADR names outright.
+			name: "a device subscribing to the log space", device: "lp-stand-01",
+			publish:   []string{"eds/lightstand/lp-stand-01/status"},
+			subscribe: []string{"eds/log/#"},
+			want:      "may not subscribe under the reserved log level",
+		},
+		{
+			// Writing another device's log lines. The store cannot tell them
+			// apart afterwards, so it has to be refused before the grant.
+			name: "a device publishing under another device's name", device: "lp-stand-01",
+			publish: []string{"eds/log/lp-stand-02"},
+			want:    "may publish only log/lp-stand-01",
+		},
+		{
+			name: "a device publishing a log wildcard", device: "lp-stand-01",
+			publish: []string{"eds/log/+"},
+			want:    "may publish only log/lp-stand-01",
+		},
+		{
+			// A workload has the tenant's ingest token; it does not need the
+			// broker to reach the store, and the bridge would file these as
+			// device logs.
+			name:    "a workload publishing into the log space",
+			publish: []string{"eds/log/lightd"},
+			want:    "only a device account may publish",
+		},
+		{
+			// Reaches the log space without naming it. A rule that looked for
+			// the literal level would pass this.
+			name: "a device subscribing to the whole tenant", device: "lp-stand-01",
+			publish:   []string{"eds/log/lp-stand-01"},
+			subscribe: []string{"eds/#"},
+			want:      "may not subscribe under the reserved log level",
+		},
+		{
+			name: "a device subscribing through a single-level wildcard", device: "lp-stand-01",
+			subscribe: []string{"eds/+/lp-stand-01"},
+			want:      "may not subscribe under the reserved log level",
+		},
+		{
+			// `+/log/#` matches the bare `<tenant>/log` too, so the bridge
+			// would carry it and no device owns it.
+			name: "a device publishing the bare log level", device: "lp-stand-01",
+			publish: []string{"eds/log"},
+			want:    "may publish only log/lp-stand-01",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := CheckLogGrants("eds", c.device, c.publish, c.subscribe)
+			if err == nil {
+				t.Fatalf("accepted %s", c.name)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("refused %s with %q, which does not mention %q", c.name, err, c.want)
+			}
+		})
+	}
+}
+
+func TestTheReservationLeavesEverythingElseAlone(t *testing.T) {
+	// eds's two real accounts, as the API stores them today. A rule that
+	// caught either of these would break a tenant's next apply.
+	cases := []struct {
+		name      string
+		device    string
+		publish   []string
+		subscribe []string
+	}{
+		{
+			name:      "the workload account",
+			publish:   []string{"eds/lightstand/+/scene", "eds/lightd/status"},
+			subscribe: []string{"eds/lightstand/+/status", "eds/lightstand/+/state"},
+		},
+		{
+			name:      "the device account",
+			device:    "lp-stand-01",
+			publish:   []string{"eds/lightstand/lp-stand-01/status"},
+			subscribe: []string{"eds/lightstand/lp-stand-01/scene"},
+		},
+		{
+			// A workload reading its own devices' logs is allowed outright:
+			// the prefix is what keeps it to its own tenant.
+			name:      "a workload reading its tenant's device logs",
+			subscribe: []string{"eds/log/#"},
+		},
+		{
+			// A tenant whose name begins with the reserved word is still only
+			// reserved at the level AFTER its prefix.
+			name:      "a level that merely looks like the reserved one",
+			device:    "lp-stand-01",
+			publish:   []string{"eds/logs/lp-stand-01", "eds/backlog"},
+			subscribe: []string{"eds/logging/#"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := CheckLogGrants("eds", c.device, c.publish, c.subscribe); err != nil {
+				t.Fatalf("refused %s: %v", c.name, err)
+			}
+		})
+	}
+}
