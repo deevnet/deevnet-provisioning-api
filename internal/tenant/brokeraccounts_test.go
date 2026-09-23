@@ -241,3 +241,39 @@ func TestASiteWithNoBrokerRefusesWithAReason(t *testing.T) {
 		t.Fatalf("err = %v, want InvalidError", err)
 	}
 }
+
+// The reserved log level, at the service boundary (ADR-0027 §3). The rule
+// itself is covered in internal/brokeracct; what matters here is that a tenant
+// asking for it gets a 400 with a reason, and that the refused account never
+// reaches the broker.
+func TestTheLogLevelIsReservedForDevicesOwnLogs(t *testing.T) {
+	svc, _, b := tenanttest.NewService()
+	ready(t, svc, "eds")
+	ctx := context.Background()
+	if _, err := svc.CreateDevice(ctx, "eds", tenant.DeviceRequest{Name: "stand-1", TrustClass: "iot"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := tenant.BrokerAccountRequest{
+		Name:    "stand-1",
+		Device:  "stand-1",
+		Publish: []string{"log/stand-2"},
+	}
+	_, err := svc.CreateBrokerAccount(ctx, "eds", req)
+	if err == nil {
+		t.Fatal("a device was granted another device's log topic")
+	}
+	var inv *tenant.InvalidError
+	if !errors.As(err, &inv) {
+		t.Errorf("err = %v, want InvalidError so the tenant sees a 400", err)
+	}
+	if _, ok := b.BrokerAccounts["eds/stand-1"]; ok {
+		t.Error("the refused account still reached the broker")
+	}
+
+	// Its own topic is the shape that works.
+	req.Publish = []string{"log/stand-1"}
+	if _, err := svc.CreateBrokerAccount(ctx, "eds", req); err != nil {
+		t.Fatalf("a device was refused its own log topic: %v", err)
+	}
+}

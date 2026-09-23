@@ -368,6 +368,21 @@ thing that connects — a device, or a tenant workload.
 - **`device` is optional.** Empty means a workload account. A named device must belong to this
   tenant and be in trust class `iot` — `iot_vendor` is refused, because the standard forbids
   `iot_vendor -> iot_backend` and the account could never be used.
+- **`log` is reserved** (ADR-0027 §3). The level immediately after the tenant's prefix is where the
+  substrate's bridge collects device logs, so a grant there means one thing only:
+
+  | | May publish under `log/` | May subscribe under `log/` |
+  |---|---|---|
+  | a **device** account | exactly `log/<its own device>` | no — `400` |
+  | a **workload** account | no — `400` | yes, its own tenant's |
+
+  A device that could publish under another device's name would write log lines the store cannot
+  tell apart afterwards. A workload with logs of its own ships them to `(index, 0)` with the
+  tenant's ingest token instead of putting them on the broker.
+
+  **It is the topic space, not the spelling.** `eds/#` and `eds/+/stand-1` reach into the log space
+  without naming it, and are refused for a device account just as `log/#` is. `eds/logs/...` is a
+  different level and is not affected.
 - **Calling it again** keeps the password that is already issued, and returns **no** `password`.
   The API holds a bcrypt hash, not the plaintext (§4), so there is nothing to return and saying so
   beats inventing one.

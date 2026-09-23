@@ -91,6 +91,12 @@ func (s *Service) CreateBrokerAccount(ctx context.Context, tenantName string, re
 	if err := brokeracct.CheckGrant(pub, sub); err != nil {
 		return IssuedBrokerAccount{}, invalid("%s", err)
 	}
+	// The reserved log level (ADR-0027 §3). This one the writer cannot check:
+	// it is not told which device an account belongs to, and the rule turns on
+	// exactly that.
+	if err := brokeracct.CheckLogGrants(tenantName, req.Device, pub, sub); err != nil {
+		return IssuedBrokerAccount{}, invalid("%s", err)
+	}
 
 	existing, err := s.Store.GetBrokerAccount(ctx, tenantName, req.Name)
 	if err != nil && !errors.Is(err, ErrNotFound) {
