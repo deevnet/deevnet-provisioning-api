@@ -54,9 +54,12 @@ type Issued struct {
 	// existed gets hold of them without being rebuilt.
 	LogIngestToken string
 	LogReadToken   string
-	TSIGSecret     string
-	StateSecret    string
-	APIToken       string
+	// DashboardPassword is the tenant's dashboard login (ADR-0024). Readable
+	// afterwards for the same reason as the log tokens, so reconcile returns it.
+	DashboardPassword string
+	TSIGSecret        string
+	StateSecret       string
+	APIToken          string
 }
 
 // Result is a tenant after a create, restore, resume or reconcile.
@@ -92,6 +95,9 @@ type Service struct {
 	// CHG-0020). Nil when the site has no store, and then a tenant simply
 	// has no log tokens.
 	LogWriter LogWriter
+	// Dashboards maintains each tenant's organisation in the dashboard server
+	// (ADR-0024, CHG-0024). Nil when the site has none.
+	Dashboards Dashboards
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.
@@ -225,6 +231,7 @@ func (s *Service) createNew(ctx context.Context, req CreateRequest) (Result, err
 	})
 
 	rec, err = s.ensure(ctx, rec)
+	issued.DashboardPassword = rec.Secrets.DashboardPassword
 	return Result{Record: rec, Outcome: outcome, Issued: issued}, err
 }
 
@@ -258,6 +265,9 @@ func (s *Service) restoreExisting(ctx context.Context, rec Record, req CreateReq
 	s.audit(ctx, string(outcome), rec.Name, map[string]any{"index": rec.Index, "requested_index": req.Index})
 
 	rec, err := s.ensure(ctx, rec)
+	// Minted by the dashboards step rather than here, so it is read back from
+	// the record the steps left, like nothing else in this response.
+	issued.DashboardPassword = rec.Secrets.DashboardPassword
 	return Result{Record: rec, Outcome: outcome, Issued: issued}, err
 }
 
@@ -276,10 +286,12 @@ func (s *Service) Reconcile(ctx context.Context, name string) (Result, error) {
 	return Result{
 		Record:  rec,
 		Outcome: OutcomeReconciled,
-		// The log tokens ride along: they are readable, and a reconcile is how a
-		// tenant created before the store existed is handed them.
+		// The log tokens and the dashboard login ride along: they are readable,
+		// and a reconcile is how a tenant created before the store or the
+		// dashboard server existed is handed them.
 		Issued: Issued{TSIGSecret: rec.Secrets.TSIG, StateSecret: rec.Secrets.State,
-			LogIngestToken: rec.Secrets.LogIngest, LogReadToken: rec.Secrets.LogRead},
+			LogIngestToken: rec.Secrets.LogIngest, LogReadToken: rec.Secrets.LogRead,
+			DashboardPassword: rec.Secrets.DashboardPassword},
 	}, err
 }
 
@@ -368,6 +380,13 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 			name string
 			run  func() error
 		}{{StepLogStore, func() error { return s.removeLogTokens(ctx, rec) }}}, steps...)
+	}
+	// Before the log tokens, which its data sources hold.
+	if s.Dashboards != nil {
+		steps = append([]struct {
+			name string
+			run  func() error
+		}{{StepDashboard, func() error { return s.removeDashboards(ctx, rec) }}}, steps...)
 	}
 
 	for _, st := range steps {
@@ -662,6 +681,16 @@ func (s *Service) ensure(ctx context.Context, rec Record) (Record, error) {
 			name string
 			run  func() error
 		}{StepLogStore, func() error { return s.ensureLogTokens(ctx, rec) }})
+	}
+	// The tenant's dashboards (ADR-0024, CHG-0024), after the log store step
+	// because the data sources carry the read token that step mints. The
+	// record is read again for the same reason: this closure must see the
+	// token, not the empty column the tenant may have started with.
+	if s.Dashboards != nil {
+		steps = append(steps, struct {
+			name string
+			run  func() error
+		}{StepDashboard, func() error { return s.ensureDashboards(ctx, s.reload(ctx, rec)) }})
 	}
 
 	for _, st := range steps {

@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Postgres {
 	}
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS audit_log, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_devices, tenant_records, tenants, schema_migrations CASCADE`,
+		`DROP TABLE IF EXISTS audit_log, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_devices, tenant_broker_accounts, tenant_records, tenants, schema_migrations CASCADE`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatal(err)
@@ -245,7 +245,8 @@ func TestServiceOverPostgres(t *testing.T) {
 	if first.Record.Index != 1 || second.Record.Index != 3 || second.Record.Status != tenant.StatusReady {
 		t.Fatalf("indexes %d and %d (%s), want 1 and 3 ready", first.Record.Index, second.Record.Index, second.Record.Status)
 	}
-	if len(second.Record.Steps) != 4 {
+	// dns, resolver, state, network, log-store and dashboards.
+	if len(second.Record.Steps) != 6 {
 		t.Fatalf("steps = %+v", second.Record.Steps)
 	}
 }
@@ -302,5 +303,39 @@ func TestSecretsAreSealedAtRest(t *testing.T) {
 		if r.Secrets.TSIG != "" || r.Secrets.State != "" {
 			t.Errorf("list carried secrets for %s", r.Name)
 		}
+	}
+}
+
+// The dashboard password is sealed like the log tokens, and the organisation
+// the server chose is kept beside it (CHG-0024).
+func TestDashboardLoginIsSealedAndItsOrgKept(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+	p.WithSealer(fakeSealer{})
+
+	if _, err := p.Create(ctx, "eds", tenant.Secrets{TSIG: "t", State: "s", APITokenHash: []byte{1}, DashboardPassword: "pw"}, lowest); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetDashboardOrg(ctx, "eds", 7); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	var org int
+	if err := p.pool.QueryRow(ctx, `SELECT dashboard_password, dashboard_org FROM tenants WHERE name = 'eds'`).Scan(&stored, &org); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "vault:v1:pw" || org != 7 {
+		t.Fatalf("stored %q / %d, want a sealed password and org 7", stored, org)
+	}
+	got, err := p.Get(ctx, "eds")
+	if err != nil || got.Secrets.DashboardPassword != "pw" || got.DashboardOrg != 7 {
+		t.Fatalf("get = %q / %d (%v)", got.Secrets.DashboardPassword, got.DashboardOrg, err)
+	}
+	// An unreadable one reads as empty, to be re-minted - and is not reported
+	// as a secret the tenant must supply.
+	p.WithSealer(refusingSealer{})
+	got, err = p.Get(ctx, "eds")
+	if err != nil || got.Secrets.DashboardPassword != "" {
+		t.Fatalf("unreadable password read as %q (%v)", got.Secrets.DashboardPassword, err)
 	}
 }

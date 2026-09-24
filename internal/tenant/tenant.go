@@ -23,13 +23,14 @@ const (
 
 // The backend steps, in the order create runs them. Delete runs them in reverse.
 const (
-	StepDNS      = "dns"
-	StepResolver = "resolver"
-	StepState    = "state"
-	StepNetwork  = "network"
-	StepWiFiKey  = "wifi-key"
-	StepBroker   = "broker-account"
-	StepLogStore = "log-store"
+	StepDNS       = "dns"
+	StepResolver  = "resolver"
+	StepState     = "state"
+	StepNetwork   = "network"
+	StepWiFiKey   = "wifi-key"
+	StepBroker    = "broker-account"
+	StepLogStore  = "log-store"
+	StepDashboard = "dashboards"
 )
 
 // LogTenant is one tenant's users in the log store. The partitions are not in
@@ -52,6 +53,30 @@ type LogWriter interface {
 	Remove(ctx context.Context, name string, index int) error
 }
 
+// DashTenant is one tenant's organisation in the dashboard server (ADR-0024,
+// CHG-0024). Like LogTenant it carries the index rather than partitions: the
+// data sources are derived from it, so no caller can point a tenant's
+// dashboards at another tenant's logs.
+type DashTenant struct {
+	Name     string
+	Index    int
+	Password string
+	// ReadToken is the tenant's log read token. The data sources carry it, so
+	// the log store's own boundary is what a dashboard query runs under.
+	ReadToken string
+}
+
+// Dashboards maintains a tenant's organisation, login and data sources in the
+// dashboard server. Ensure returns the organisation's id, which the server
+// chooses and the tenant needs to name in its own Terraform.
+//
+// Nil is legal, like LogWriter: a site with no dashboard server is a
+// legitimate site, and its tenants simply have no dashboards.
+type Dashboards interface {
+	Ensure(ctx context.Context, t DashTenant) (orgID int, err error)
+	Remove(ctx context.Context, name string) error
+}
+
 // Secrets are what the API keeps for a tenant. The TSIG and state secrets are
 // kept usable because the API has to re-ensure them after a backend rebuild;
 // the API token is kept only as a hash.
@@ -66,6 +91,10 @@ type Secrets struct {
 	// sealed in the same column family and restored the same way.
 	LogIngest string
 	LogRead   string
+	// DashboardPassword is the tenant's dashboard login (ADR-0024 §2). Kept
+	// usable for the same reason as the log tokens: the server is told what it
+	// is, so an unreadable one is re-minted rather than asked for.
+	DashboardPassword string
 	// Unreadable is set when a stored secret could not be opened - which is what
 	// a rebuilt or rotated Transit key leaves behind (ADR-0016 §6). It is not the
 	// same as a secret being empty, and the difference is the whole point: a
@@ -186,13 +215,17 @@ type BrokerAccount struct {
 
 // Record is a tenant as the registry holds it.
 type Record struct {
-	Name      string
-	Index     int
-	Status    Status
-	Secrets   Secrets
-	Steps     []Step
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Name    string
+	Index   int
+	Status  Status
+	Secrets Secrets
+	// DashboardOrg is the tenant's organisation in the dashboard server, or 0
+	// before the dashboards step has run. Not a secret: it is chosen by the
+	// server, and recorded so the tenant can be told it.
+	DashboardOrg int
+	Steps        []Step
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // AuditEntry is one line of the audit log: who did what to which tenant.
@@ -252,6 +285,9 @@ type Store interface {
 
 	SetStatus(ctx context.Context, name string, status Status) error
 	SetSecrets(ctx context.Context, name string, secrets Secrets) error
+	// SetDashboardOrg records the organisation the dashboard server gave the
+	// tenant (CHG-0024).
+	SetDashboardOrg(ctx context.Context, name string, orgID int) error
 	RecordStep(ctx context.Context, name, step string, stepErr error) error
 	Delete(ctx context.Context, name string) error
 

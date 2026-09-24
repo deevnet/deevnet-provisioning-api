@@ -10,7 +10,7 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 being up.
 
 It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry,
-their MQTT broker accounts and their log store tokens (`docs/api-v1.md`).
+their MQTT broker accounts, their log store tokens and their Grafana organisation (`docs/api-v1.md`).
 
 The repository name says what the service is for; the service itself, its binary, image and
 container keep the short name `deevnet-api`, which is what the `deevnet.mgmt` `deevnet_api` role
@@ -57,9 +57,17 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   through a root-only env file written by the `deevnet_api` Ansible role.
 - **Never put secrets or connection errors in a response body.** Readiness logs the reason and
   returns a fixed shape. A failed backend step names the step only; its error goes to the log and
-  `tenant_steps`. Secrets appear only in create and restore responses - and the log tokens also on a
-  reconcile, because unlike the API token they are readable and a tenant created before the store
-  existed has to be handed them somehow. Tests assert all of this.
+  `tenant_steps`. Secrets appear only in create and restore responses - and the log tokens and the
+  dashboard password also on a reconcile, because unlike the API token they are readable and a tenant
+  created before the store existed has to be handed them somehow. Tests assert all of this.
+- **Dashboard data sources have fixed UIDs** (`internal/backend/grafana.DataSources`), the same in
+  every tenant's organisation and on the Pi. A dashboard names them; changing one breaks every
+  tenant's dashboards. The tenant login is an Editor, never Admin: an Admin can create a data
+  source, which is a URL Grafana's server requests for it.
+- **Grafana 13 quirks the client is built around** (verified against 13.2.2 by
+  `make test-integration`): `users.auto_assign_org` must stay ON or `OrgId` on user create is ignored
+  and a personal organisation named for the login is made; `DELETE /api/orgs/<id>` answers 500
+  (grafana/grafana#127386), so Remove renames the emptied organisation instead.
 - **`/healthz` must not touch the database.** It is liveness. Readiness is `/readyz`.
 - **Two writers, two hosts, two keys.** Broker accounts go to the messaging VM as a bcrypt hash;
   log tokens go to the observability store as the token itself, because vmauth compares what it was
