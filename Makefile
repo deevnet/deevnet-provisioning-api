@@ -26,12 +26,20 @@ LOGWRITER       := deevnet-log-user
 LOGWRITER_STAGE := $(ARTIFACTS_ROOT)/binaries/$(LOGWRITER)
 LOGWRITER_FILE  := $(LOGWRITER)-$(VERSION)
 
+# The Pi take-home image (deevnet-image-factory, pi-backend) runs deevnet-kit
+# and the log store's user writer on arm64. The image factory downloads them
+# from the artifact server, so they are staged under the same binaries tree
+# with the architecture in the name.
+KIT      := deevnet-kit
+PI_ARCH  := arm64
+PI_BIN   := bin/linux-$(PI_ARCH)
+
 LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Version=$(VERSION) \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.Built=$(BUILT)
 
-.PHONY: default help test test-integration vet build build-writer build-log-writer image stage stage-writer stage-log-writer clean
+.PHONY: default help test test-integration vet build build-writer build-log-writer build-pi image stage stage-writer stage-log-writer stage-pi clean
 
 default: help
 
@@ -50,6 +58,10 @@ help:
 	@echo "          the log store's user writer, a host binary for the observability store"
 	@echo "  stage-log-writer"
 	@echo "          build-log-writer, then install it under $(ARTIFACTS_ROOT)/binaries (sudo)"
+	@echo "  build-pi"
+	@echo "          deevnet-kit and $(LOGWRITER) for the Pi image, linux/$(PI_ARCH)"
+	@echo "  stage-pi"
+	@echo "          build-pi, then install both under $(ARTIFACTS_ROOT)/binaries (sudo)"
 	@echo "  image   podman build $(IMAGE):$(VERSION)"
 	@echo "  stage   image, then save it under $(STAGE_DIR) (sudo)"
 	@echo "  clean   remove bin/"
@@ -109,6 +121,13 @@ build-writer:
 build-log-writer:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(LOGWRITER) ./cmd/$(LOGWRITER)
 
+# Cross-compiled: the Pi image is built on the Builder, not on a Pi.
+build-pi:
+	@mkdir -p $(PI_BIN)
+	for c in $(KIT) $(LOGWRITER); do \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=$(PI_ARCH) go build -trimpath -ldflags "$(LDFLAGS)" -o $(PI_BIN)/$$c ./cmd/$$c || exit 1; \
+	done
+
 image:
 	podman build \
 	  --build-arg VERSION=$(VERSION) \
@@ -144,6 +163,16 @@ stage-log-writer: build-log-writer
 	sudo install -o nginx -g nginx -m 0644 bin/$(LOGWRITER) $(LOGWRITER_STAGE)/$(LOGWRITER_FILE)
 	sudo ln -sfn $(LOGWRITER_FILE) $(LOGWRITER_STAGE)/$(LOGWRITER)-latest
 	@echo "staged $(LOGWRITER_STAGE)/$(LOGWRITER_FILE)"
+
+stage-pi: build-pi
+	@case "$(VERSION)" in *-dirty|dev) echo "refusing to stage VERSION=$(VERSION); commit and tag first" >&2; exit 1;; esac
+	for c in $(KIT) $(LOGWRITER); do \
+	  d=$(ARTIFACTS_ROOT)/binaries/$$c; f=$$c-$(VERSION)-linux-$(PI_ARCH); \
+	  sudo install -d -o nginx -g nginx -m 0755 $$d && \
+	  sudo install -o nginx -g nginx -m 0644 $(PI_BIN)/$$c $$d/$$f && \
+	  sudo ln -sfn $$f $$d/$$c-latest-linux-$(PI_ARCH) && \
+	  echo "staged $$d/$$f" || exit 1; \
+	done
 
 clean:
 	rm -rf bin
