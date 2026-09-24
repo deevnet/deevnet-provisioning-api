@@ -399,6 +399,7 @@ func (k *kit) cmdStatus() error {
 		return err
 	}
 	fmt.Printf("\n%d broker account(s); deevnet-kit account list\n", len(accts))
+	fmt.Printf("selftest %s\n", k.lastSelftest())
 	missing, err := k.uncoveredAddrs()
 	if err != nil {
 		return err

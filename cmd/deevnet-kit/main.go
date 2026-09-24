@@ -46,6 +46,8 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
   deevnet-kit regen-certs              reissue the server certificate for this hostname
   deevnet-kit render                   rewrite the broker and log store config from state
   deevnet-kit dashboards               ensure the tenant's Grafana organisation (each boot)
+  deevnet-kit selftest                 prove the card end to end: TLS, a device log over
+                                       MQTT, an app log, and both read back through Grafana
 
 Patterns are RELATIVE to the tenant, as they are on Deevnet: "sensors/+/telemetry"
 becomes "<tenant>/sensors/+/telemetry". --password keeps a device's existing
@@ -85,6 +87,8 @@ func run(args []string) error {
 		return k.renderAll(true)
 	case "dashboards":
 		return k.cmdDashboards()
+	case "selftest":
+		return k.cmdSelftest()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil

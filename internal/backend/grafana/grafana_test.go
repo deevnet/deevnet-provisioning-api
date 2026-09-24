@@ -163,6 +163,27 @@ func TestEnsureBuildsTheTenantsOrganisationAndRemoves(t *testing.T) {
 		t.Fatalf("after ensure the login is in %+v (%v), want one organisation", orgs, err)
 	}
 
+	// A starter dashboard is created once, and a tenant's change to it stands.
+	dash := map[string]any{"uid": "tprobe-start", "title": "Start here"}
+	if err := c.EnsureDashboard(ctx, org, dash); err != nil {
+		t.Fatalf("ensure dashboard: %v", err)
+	}
+	edited := map[string]any{"dashboard": map[string]any{"uid": "tprobe-start", "title": "Mine now"}, "overwrite": true}
+	if err := asUser(t, c, tt.Name, tt2.Password, http.MethodPost, "/api/dashboards/db", org, edited, nil); err != nil {
+		t.Fatalf("the tenant cannot edit the starter dashboard: %v", err)
+	}
+	if err := c.EnsureDashboard(ctx, org, dash); err != nil {
+		t.Fatalf("ensure dashboard again: %v", err)
+	}
+	var got struct {
+		Dashboard struct {
+			Title string `json:"title"`
+		} `json:"dashboard"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/dashboards/uid/tprobe-start", org, nil, &got); err != nil || got.Dashboard.Title != "Mine now" {
+		t.Fatalf("after a second ensure the title is %q (%v); the tenant's edit was overwritten", got.Dashboard.Title, err)
+	}
+
 	if err := c.Remove(ctx, tt.Name); err != nil {
 		t.Fatalf("remove: %v", err)
 	}

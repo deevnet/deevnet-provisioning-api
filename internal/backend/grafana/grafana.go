@@ -454,6 +454,28 @@ func (c *Client) ensureDataSource(ctx context.Context, org int, t tenant.DashTen
 	return c.do(ctx, http.MethodPut, path, org, body, nil)
 }
 
+// --- dashboards ------------------------------------------------------------------
+
+// EnsureDashboard creates a dashboard in an organisation when none has its
+// UID, and otherwise leaves it alone. It never overwrites: once created, the
+// dashboard is the tenant's to change or delete, and a later run must not undo
+// that. The take-home Pi uses it for the starter dashboard it opens with.
+func (c *Client) EnsureDashboard(ctx context.Context, org int, dashboard map[string]any) error {
+	uid, _ := dashboard["uid"].(string)
+	if uid == "" {
+		return errors.New("a dashboard needs a uid to be ensured")
+	}
+	err := c.do(ctx, http.MethodGet, "/api/dashboards/uid/"+url.PathEscape(uid), org, nil, nil)
+	switch {
+	case err == nil:
+		return nil
+	case !isStatus(err, 404):
+		return err
+	}
+	return c.do(ctx, http.MethodPost, "/api/dashboards/db", org,
+		map[string]any{"dashboard": dashboard, "overwrite": false}, nil)
+}
+
 // --- transport -------------------------------------------------------------------
 
 // do makes one call as the server admin. A non-zero org selects the

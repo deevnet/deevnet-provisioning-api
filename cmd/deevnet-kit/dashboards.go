@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,6 +26,15 @@ import (
 // init cannot do this itself: it runs before any service starts, and this
 // needs Grafana and vmauth up. So it is its own command, run by its own unit
 // after both, on every boot - which also repairs anything changed by hand.
+
+// starterDashboard is what the tenant's organisation opens with on a Pi, so
+// its logs are visible before it has written a dashboard of its own. It uses
+// only the contract's data source UIDs. Created once, then the tenant's.
+//
+//go:embed starter-dashboard.json
+var starterDashboard []byte
+
+const starterUID = "deevnet-kit-start"
 
 // The admin's login name. The tenant's login is the tenant's name, which
 // grafana.Client refuses when it equals this.
@@ -92,13 +103,20 @@ func (k *kit) cmdDashboards() error {
 	if err != nil {
 		return fmt.Errorf("grafana: %w", err)
 	}
+	var dash map[string]any
+	if err := json.Unmarshal(starterDashboard, &dash); err != nil {
+		return fmt.Errorf("starter dashboard: %w", err)
+	}
+	if err := c.EnsureDashboard(context.Background(), org, dash); err != nil {
+		return fmt.Errorf("starter dashboard: %w", err)
+	}
 	if org != st.DashboardOrg {
 		st.DashboardOrg = org
 		if err := writeJSON(k.stateFile(), st, 0o600); err != nil {
 			return err
 		}
 	}
-	fmt.Printf("grafana: organisation %d for %s, with %d log data sources\n", org, st.Tenant, len(grafana.DataSources))
+	fmt.Printf("grafana: organisation %d for %s, with %d log data sources and the %q dashboard\n", org, st.Tenant, len(grafana.DataSources), "Start here")
 	return nil
 }
 
