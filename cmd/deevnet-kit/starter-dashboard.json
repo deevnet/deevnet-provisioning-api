@@ -1,0 +1,62 @@
+{
+  "uid": "deevnet-kit-start",
+  "title": "Start here",
+  "tags": ["deevnet-kit"],
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "text",
+      "title": "Your Pi",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
+      "options": {
+        "mode": "markdown",
+        "content": "Your devices' logs (`<tenant>/log/<device>` over MQTT) and your app's logs, on your own Pi. A number in a device's JSON log line, such as `{\"temp_c\": 21.5}`, is graphed below. This dashboard is yours: edit it, or declare your own with the Terraform `grafana` provider (see `/opt/deevnet-kit/README.txt`)."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Temperature (from device logs)",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "deevnet-logs-devices" },
+      "fieldConfig": { "defaults": { "unit": "celsius" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-logs-datasource", "uid": "deevnet-logs-devices" },
+          "queryType": "statsRange",
+          "expr": "temp_c:* | stats by (device) avg(temp_c) temp_c",
+          "legendFormat": "{{device}}"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Device logs",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 10 },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "deevnet-logs-devices" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-logs-datasource", "uid": "deevnet-logs-devices" },
+          "queryType": "instant",
+          "expr": "*"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "App logs",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 10 },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "deevnet-logs-workloads" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "victoriametrics-logs-datasource", "uid": "deevnet-logs-workloads" },
+          "queryType": "instant",
+          "expr": "*"
+        }
+      ]
+    }
+  ]
+}
