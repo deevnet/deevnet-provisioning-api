@@ -4,9 +4,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -311,5 +317,81 @@ func TestBrokerTimeoutsAreCheckedAndDefaulted(t *testing.T) {
 	e["DEEVNET_BROKER_CONNECT_TIMEOUT"] = "0s"
 	if _, err := tenantService(context.Background(), env(e)); err == nil {
 		t.Error("an unbounded connect timeout was accepted")
+	}
+}
+
+// grafanaEnvFor is a site with a log store and a dashboard server. The CA is a
+// real certificate, because the client reads it at startup.
+func grafanaEnvFor(t *testing.T) map[string]string {
+	t.Helper()
+	priv, host := writerKeys(t)
+	e := fullEnv()
+	e["DEEVNET_LOG_WRITER_ADDR"] = "10.20.25.22:22"
+	e["DEEVNET_LOG_WRITER_USER"] = "deevnet-logwriter"
+	e["DEEVNET_LOG_HOST_KEY"] = host
+	e["LOG_WRITER_KEY"] = priv
+	e["DEEVNET_LOG_ENDPOINT"] = "https://dv02obs001v01.mobile.deevnet.net:8427"
+	e["DEEVNET_GRAFANA_URL"] = "https://dv02obs001v01.mobile.deevnet.net:3000"
+	e["DEEVNET_GRAFANA_CACERT"] = testCA(t)
+	e["GRAFANA_ADMIN_PASSWORD"] = "admin-password"
+	return e
+}
+
+func testCA(t *testing.T) string {
+	t.Helper()
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test CA"},
+		NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestNoGrafanaStillStarts(t *testing.T) {
+	w, err := tenantService(context.Background(), env(fullEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Dashboards != nil || w.site.DashboardURL != "" {
+		t.Error("no DEEVNET_GRAFANA_URL should mean no dashboards")
+	}
+}
+
+func TestGrafanaWiredWhenConfigured(t *testing.T) {
+	w, err := tenantService(context.Background(), env(grafanaEnvFor(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Dashboards == nil || w.site.DashboardURL == "" {
+		t.Fatal("dashboards not wired")
+	}
+}
+
+// Dashboards without a log store would give tenants data sources that
+// authenticate as nobody, so that is refused at startup.
+func TestGrafanaHalfConfigured(t *testing.T) {
+	for _, tc := range []struct{ name, drop, want string }{
+		{"no CA", "DEEVNET_GRAFANA_CACERT", "DEEVNET_GRAFANA_CACERT"},
+		{"no log store", "DEEVNET_LOG_WRITER_ADDR", "DEEVNET_LOG_WRITER_ADDR"},
+		{"no log endpoint", "DEEVNET_LOG_ENDPOINT", "DEEVNET_LOG_ENDPOINT"},
+		{"no admin password", "GRAFANA_ADMIN_PASSWORD", "grafana_admin_password"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := grafanaEnvFor(t)
+			delete(e, tc.drop)
+			_, err := tenantService(context.Background(), env(e))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to name %s", err, tc.want)
+			}
+		})
 	}
 }

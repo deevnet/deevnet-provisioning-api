@@ -47,7 +47,7 @@ help:
 	@echo "Targets:"
 	@echo "  test    go test ./..."
 	@echo "  test-integration"
-	@echo "          the same tests against throwaway PostgreSQL, PowerDNS and MinIO containers"
+	@echo "          the same tests against throwaway PostgreSQL, PowerDNS, MinIO and Grafana containers"
 	@echo "  vet     go vet ./..."
 	@echo "  build   static binary in bin/"
 	@echo "  build-writer"
@@ -81,12 +81,25 @@ IT_IMAGES    := $(ARTIFACTS_ROOT)/container-images
 IT_PG        := docker.io/library/postgres:17.11
 IT_PDNS      := docker.io/powerdns/pdns-auth-49:4.9.17
 IT_MINIO     := quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+# Grafana needs HTTPS (the client will not skip verification) and the
+# VictoriaLogs plugin, so a throwaway certificate and the mirrored plugin are
+# put in a temporary directory and mounted.
+IT_GRAFANA        := docker.io/grafana/grafana:13.2.2
+IT_GRAFANA_PLUGIN := $(ARTIFACTS_ROOT)/grafana-plugins/victoriametrics-logs-datasource-v0.32.0.zip
+IT_GRAFANA_DIR    := /tmp/$(IT_PREFIX)-grafana
 
 test-integration:
 	@podman image exists $(IT_PG)    || podman load -q -i $(IT_IMAGES)/postgres/postgres-17.11.tar
 	@podman image exists $(IT_PDNS)  || podman load -q -i $(IT_IMAGES)/pdns-auth/pdns-auth-4.9.17.tar
 	@podman image exists $(IT_MINIO) || podman load -q -i $(IT_IMAGES)/minio/minio-RELEASE.2025-09-07T16-13-09Z.tar
-	@podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio >/dev/null 2>&1 || true
+	@podman image exists $(IT_GRAFANA) || podman load -q -i $(IT_IMAGES)/grafana/grafana-13.2.2.tar
+	@podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio $(IT_PREFIX)-grafana >/dev/null 2>&1 || true
+	@rm -rf $(IT_GRAFANA_DIR) && mkdir -p $(IT_GRAFANA_DIR)/plugins $(IT_GRAFANA_DIR)/tls
+	@unzip -q $(IT_GRAFANA_PLUGIN) -d $(IT_GRAFANA_DIR)/plugins
+	@openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=localhost \
+	  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+	  -keyout $(IT_GRAFANA_DIR)/tls/key.pem -out $(IT_GRAFANA_DIR)/tls/cert.pem 2>/dev/null
+	@chmod 644 $(IT_GRAFANA_DIR)/tls/key.pem
 	podman run -d --name $(IT_PREFIX)-pg -p 127.0.0.1:25432:5432 \
 	  -e POSTGRES_DB=it -e POSTGRES_USER=it -e POSTGRES_PASSWORD=it $(IT_PG) >/dev/null
 	podman run -d --name $(IT_PREFIX)-pdns -p 127.0.0.1:28081:8081 $(IT_PDNS) \
@@ -95,14 +108,23 @@ test-integration:
 	  "--default-soa-content=dv02idn001v01.mobile.deevnet.net hostmaster.@ 0 10800 3600 604800 3600" >/dev/null
 	podman run -d --name $(IT_PREFIX)-minio -p 127.0.0.1:29000:9000 \
 	  -e MINIO_ROOT_USER=it-root -e MINIO_ROOT_PASSWORD=it-root-secret $(IT_MINIO) server /data >/dev/null
+	podman run -d --name $(IT_PREFIX)-grafana -p 127.0.0.1:23000:3000 \
+	  -v $(IT_GRAFANA_DIR)/plugins:/var/lib/grafana/plugins:ro,Z -v $(IT_GRAFANA_DIR)/tls:/tls:ro,Z \
+	  -e GF_SERVER_PROTOCOL=https -e GF_SERVER_CERT_FILE=/tls/cert.pem -e GF_SERVER_CERT_KEY=/tls/key.pem \
+	  -e GF_SECURITY_ADMIN_PASSWORD=it-admin-pw -e GF_PLUGINS_PREINSTALL_DISABLED=true \
+	  -e GF_AUTH_ANONYMOUS_ENABLED=false -e GF_USERS_ALLOW_SIGN_UP=false $(IT_GRAFANA) >/dev/null
 	@for i in $$(seq 1 30); do podman exec $(IT_PREFIX)-pg pg_isready -U it -d it >/dev/null 2>&1 && break; sleep 1; done
+	@for i in $$(seq 1 60); do curl -sf --cacert $(IT_GRAFANA_DIR)/tls/cert.pem https://127.0.0.1:23000/api/health >/dev/null && break; sleep 1; done
 	@sleep 3
 	DEEVNET_TEST_DATABASE_URL='postgres://it:it@127.0.0.1:25432/it?sslmode=disable' \
 	DEEVNET_TEST_PDNS_URL=http://127.0.0.1:28081 DEEVNET_TEST_PDNS_KEY=it \
 	DEEVNET_TEST_MINIO_ENDPOINT=127.0.0.1:29000 \
 	DEEVNET_TEST_MINIO_ACCESS_KEY=it-root DEEVNET_TEST_MINIO_SECRET_KEY=it-root-secret \
+	DEEVNET_TEST_GRAFANA_URL=https://127.0.0.1:23000 DEEVNET_TEST_GRAFANA_PASSWORD=it-admin-pw \
+	DEEVNET_TEST_GRAFANA_CA=$(IT_GRAFANA_DIR)/tls/cert.pem \
 	go test -count=1 -p 1 ./... ; rc=$$?; \
-	podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio >/dev/null; exit $$rc
+	podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio $(IT_PREFIX)-grafana >/dev/null; \
+	rm -rf $(IT_GRAFANA_DIR); exit $$rc
 
 vet:
 	go vet ./...

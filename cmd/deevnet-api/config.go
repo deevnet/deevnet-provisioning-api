@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/brokerwriter"
+	"github.com/deevnet/deevnet-provisioning-api/internal/backend/grafana"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/logwriter"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/minio"
 	"github.com/deevnet/deevnet-provisioning-api/internal/backend/omada"
@@ -129,6 +130,30 @@ var logCredentials = []string{
 	"log_writer_key",
 }
 
+// grafanaEnv is what the API needs to give tenants their dashboards (ADR-0024;
+// CHG-0024). DEEVNET_GRAFANA_URL turns it on; the rest is then required.
+// Optional for the same reason as the others, and it also needs the log store:
+// the data sources carry the tenant's log read token, and point at
+// DEEVNET_LOG_ENDPOINT.
+//
+// The URL is both where the API reaches the server and what a tenant is told,
+// because both reach it by the same name. The CA verifies the server, and the
+// data sources verify the log store with it: both certificates come from the
+// site CA.
+var grafanaEnv = []string{
+	"DEEVNET_GRAFANA_URL",
+	"DEEVNET_GRAFANA_CACERT",
+	"DEEVNET_LOG_ENDPOINT",
+	"DEEVNET_LOG_WRITER_ADDR",
+}
+
+// grafanaCredentials are checked only when DEEVNET_GRAFANA_URL is set. The
+// server admin's password: creating an organisation is a server-admin act, and
+// no organisation-scoped token can do it.
+var grafanaCredentials = []string{
+	"grafana_admin_password",
+}
+
 // openbaoEnv is what the API needs to reach OpenBao. OPENBAO_ADDR turns
 // OpenBao on; the rest are then required.
 var openbaoEnv = []string{
@@ -148,6 +173,7 @@ var openbaoEnv = []string{
 //	PROXMOX_INSECURE_TLS   "true": so is the node's
 //	MINIO_ADMIN_TLS        "false"
 //
+//	DEEVNET_GRAFANA_ADMIN_USER     "admin"
 //	DEEVNET_BROKER_CONNECT_TIMEOUT "10s": reaching the messaging VM
 //	DEEVNET_BROKER_SESSION_TIMEOUT "30s": the whole exchange once connected.
 //	                               A tenant's terraform apply is holding the
@@ -203,7 +229,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		// The optional ones are read here too, so a local run without OpenBao
 		// can still reach a controller. They are not added to the required
 		// check below.
-		for _, k := range append(append(append(append([]string{}, credentials...), omadaCredentials...), brokerCredentials...), logCredentials...) {
+		for _, k := range append(append(append(append(append([]string{}, credentials...), omadaCredentials...), brokerCredentials...), logCredentials...), grafanaCredentials...) {
 			creds[k] = getenv(strings.ToUpper(k))
 		}
 	}
@@ -250,6 +276,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		DNSUpdateFrom:     updateFrom,
 		StateEndpoint:     getenv("DEEVNET_STATE_ENDPOINT"),
 		LogEndpoint:       getenv("DEEVNET_LOG_ENDPOINT"),
+		DashboardURL:      getenv("DEEVNET_GRAFANA_URL"),
 		StateBucket:       getenv("DEEVNET_STATE_BUCKET"),
 		ResolverForwardTo: getenv("DEEVNET_RESOLVER_FORWARD_TO"),
 		WorkloadResolver:  getenv("DEEVNET_WORKLOAD_RESOLVER"),
@@ -291,6 +318,16 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		for _, k := range logCredentials {
 			if creds[k] == "" {
 				return wiring{}, fmt.Errorf("DEEVNET_LOG_WRITER_ADDR is set, but %s is missing from the backend credentials", k)
+			}
+		}
+	}
+	if getenv("DEEVNET_GRAFANA_URL") != "" {
+		if missing := empty(getenv, grafanaEnv); len(missing) > 0 {
+			return wiring{}, fmt.Errorf("DEEVNET_GRAFANA_URL is set, but these are empty: %s", strings.Join(missing, ", "))
+		}
+		for _, k := range grafanaCredentials {
+			if creds[k] == "" {
+				return wiring{}, fmt.Errorf("DEEVNET_GRAFANA_URL is set, but %s is missing from the backend credentials", k)
 			}
 		}
 	}
@@ -401,6 +438,23 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			return wiring{}, fmt.Errorf("log store user writer: %w", err)
 		}
 		svc.LogWriter = w
+	}
+
+	// The dashboard server. Reached over HTTPS on the API's own segment, and
+	// verified: what crosses is the server admin's password and each tenant's
+	// read token.
+	if getenv("DEEVNET_GRAFANA_URL") != "" {
+		d, err := grafana.New(grafana.Config{
+			URL:           getenv("DEEVNET_GRAFANA_URL"),
+			AdminUser:     orDefault(getenv("DEEVNET_GRAFANA_ADMIN_USER"), "admin"),
+			AdminPassword: creds["grafana_admin_password"],
+			CAFile:        getenv("DEEVNET_GRAFANA_CACERT"),
+			LogEndpoint:   getenv("DEEVNET_LOG_ENDPOINT"),
+		})
+		if err != nil {
+			return wiring{}, fmt.Errorf("dashboard server: %w", err)
+		}
+		svc.Dashboards = d
 	}
 	return wiring{tenants: svc, sealer: sealer, site: site}, nil
 }

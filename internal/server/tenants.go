@@ -137,6 +137,19 @@ type logView struct {
 	SelectHeader string `json:"select_header,omitempty"`
 }
 
+// dashboardView is the tenant's login to the dashboard server (ADR-0024,
+// CHG-0024). The organisation is the tenant's boundary there: its login is an
+// Editor in it and a member of nothing else. The password appears only when
+// issued, like the log tokens. The data sources are not listed: their UIDs are
+// fixed and the same for every tenant, which is what lets a dashboard move
+// between sites unchanged.
+type dashboardView struct {
+	URL      string `json:"url,omitempty"`
+	OrgID    int    `json:"org_id,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
 // stepView leaves out the step's error text: it can name backend hosts, and it
 // is in the log and the database for the operator who needs it.
 type stepView struct {
@@ -146,18 +159,19 @@ type stepView struct {
 }
 
 type tenantView struct {
-	Name      string      `json:"name"`
-	Index     int         `json:"index"`
-	Status    string      `json:"status"`
-	Outcome   string      `json:"outcome,omitempty"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
-	Network   networkView `json:"network"`
-	Fabric    fabricView  `json:"fabric"`
-	DNS       dnsView     `json:"dns"`
-	State     stateView   `json:"state"`
-	Log       logView     `json:"log"`
-	APIToken  string      `json:"api_token,omitempty"`
+	Name      string        `json:"name"`
+	Index     int           `json:"index"`
+	Status    string        `json:"status"`
+	Outcome   string        `json:"outcome,omitempty"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	Network   networkView   `json:"network"`
+	Fabric    fabricView    `json:"fabric"`
+	DNS       dnsView       `json:"dns"`
+	State     stateView     `json:"state"`
+	Log       logView       `json:"log"`
+	Dashboard dashboardView `json:"dashboard"`
+	APIToken  string        `json:"api_token,omitempty"`
 	// SecretsStored is false when the API holds secrets for this tenant that it
 	// can no longer read - a rebuilt or rotated Transit key (ADR-0016 §6). The
 	// tenant's own state is the authoritative copy (ADR-0015 §4), so this is how
@@ -203,7 +217,15 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 			SelectHeader: "X-Deevnet-Partition",
 		},
 		SecretsStored: !rec.Secrets.Unreadable,
-		Steps:         []stepView{},
+		// Told only once the server has the tenant: before that there is no
+		// login, and a username for one would be a promise the site has not kept.
+		Dashboard: func() dashboardView {
+			if site.DashboardURL == "" || rec.DashboardOrg == 0 {
+				return dashboardView{}
+			}
+			return dashboardView{URL: site.DashboardURL, OrgID: rec.DashboardOrg, Username: rec.Name}
+		}(),
+		Steps: []stepView{},
 	}
 	if issued != nil {
 		v.DNS.TSIGSecret = issued.TSIGSecret
@@ -211,6 +233,9 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 		v.APIToken = issued.APIToken
 		v.Log.IngestToken = issued.LogIngestToken
 		v.Log.ReadToken = issued.LogReadToken
+		if v.Dashboard.Username != "" {
+			v.Dashboard.Password = issued.DashboardPassword
+		}
 	}
 	for _, s := range rec.Steps {
 		v.Steps = append(v.Steps, stepView{Name: s.Name, OK: s.OK, UpdatedAt: s.UpdatedAt})
@@ -316,7 +341,7 @@ func (h *tenantHandlers) reconcile(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	// The log tokens, and only those. A reconcile deliberately returns no TSIG
+	// The log tokens and the dashboard password, and only those. A reconcile deliberately returns no TSIG
 	// secret and no state key: the tenant's own state holds those, and handing
 	// them back would make a repair look like a reissue. The log tokens are
 	// different - the store is told what they are, the API can read them back,
@@ -325,6 +350,8 @@ func (h *tenantHandlers) reconcile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.view(res.Record, res.Outcome, &tenant.Issued{
 		LogIngestToken: res.Issued.LogIngestToken,
 		LogReadToken:   res.Issued.LogReadToken,
+		// The dashboard password for the same reason as the log tokens.
+		DashboardPassword: res.Issued.DashboardPassword,
 	}))
 }
 

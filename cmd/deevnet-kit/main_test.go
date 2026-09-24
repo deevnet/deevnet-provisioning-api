@@ -266,3 +266,42 @@ func checkHash(t *testing.T, hash, password string) bool {
 	got, _ := pbkdf2.Key(sha512.New, password, salt, 101, sha512.Size)
 	return string(got) == string(want)
 }
+
+// init mints Grafana's secrets and writes its environment file, and kit.env
+// carries the Grafana lines only once the organisation exists.
+func TestInitWritesGrafanaSecretsAndKitEnvWaitsForTheOrg(t *testing.T) {
+	k, st := initKit(t, "tenant=bench1\nindex=4\n")
+	for name, v := range map[string]string{"admin": st.GrafanaAdminPassword, "secret key": st.GrafanaSecretKey, "login": st.DashboardPassword} {
+		if len(v) != 64 {
+			t.Errorf("grafana %s = %q, want 64 hex characters", name, v)
+		}
+	}
+	b, err := os.ReadFile(k.grafanaEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "GF_SECURITY_ADMIN_PASSWORD="+st.GrafanaAdminPassword) ||
+		!strings.Contains(string(b), "GF_SECURITY_SECRET_KEY="+st.GrafanaSecretKey) {
+		t.Error("grafana.env does not carry the admin password and secret key")
+	}
+	if fi, _ := os.Stat(k.grafanaEnv()); fi.Mode().Perm() != 0o600 {
+		t.Errorf("grafana.env is %v, want 0600", fi.Mode().Perm())
+	}
+
+	if env := kitEnv(st, "bench1.local"); strings.Contains(env, "GRAFANA_AUTH") {
+		t.Error("kit.env names a Grafana login before the organisation exists")
+	}
+	st.DashboardOrg = 2
+	env := kitEnv(st, "bench1.local")
+	for _, want := range []string{
+		"GRAFANA_URL=https://bench1.local:3000\n",
+		"GRAFANA_AUTH=bench1:" + st.DashboardPassword + "\n",
+		"GRAFANA_ORG_ID=2\n",
+		"TF_VAR_grafana_org_id=2\n",
+		"GRAFANA_CA_CERT=site-ca.pem\n",
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("kit.env lacks %q", want)
+		}
+	}
+}

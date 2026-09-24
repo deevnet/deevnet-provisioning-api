@@ -21,13 +21,15 @@ import (
 )
 
 // The services the image runs, by unit name.
-var units = []string{"mosquitto", "victorialogs", "vmauth", "deevnet-log-bridge"}
+var units = []string{"mosquitto", "victorialogs", "vmauth", "deevnet-log-bridge", "grafana", "deevnet-kit-dashboards"}
 
 const (
 	// The ports are Deevnet's, so an app moved from Deevnet changes a host
 	// name and nothing else.
 	brokerPort = 8883
 	logPort    = 8427
+	// Grafana's, as on Deevnet (CHG-0024).
+	dashboardPort = 3000
 
 	// The bridge's broker account. The leading underscore keeps it out of
 	// the <tenant>-<name> space: no tenant name starts with one.
@@ -57,6 +59,14 @@ type state struct {
 	ReadToken        string `json:"read_token"`
 	BridgeStoreToken string `json:"bridge_store_token"`
 	BridgePassword   string `json:"bridge_password"`
+
+	// Grafana (ADR-0024, CHG-0024). The admin is the Pi's owner's; the
+	// tenant's login is what an app and its Terraform use, as on Deevnet.
+	// DashboardOrg is 0 until `deevnet-kit dashboards` has run once.
+	GrafanaAdminPassword string `json:"grafana_admin_password"`
+	GrafanaSecretKey     string `json:"grafana_secret_key"`
+	DashboardPassword    string `json:"dashboard_password"`
+	DashboardOrg         int    `json:"dashboard_org"`
 }
 
 // kit holds the paths. root is empty on a Pi and a temporary directory in
@@ -77,6 +87,7 @@ func (k *kit) accountsDir() string  { return filepath.Join(k.etc(), "accounts") 
 func (k *kit) tlsDir() string       { return filepath.Join(k.etc(), "tls") }
 func (k *kit) caFile() string       { return filepath.Join(k.tlsDir(), "ca.pem") }
 func (k *kit) bridgeEnv() string    { return filepath.Join(k.etc(), "log-bridge.env") }
+func (k *kit) grafanaEnv() string   { return filepath.Join(k.etc(), "grafana.env") }
 func (k *kit) logDir() string       { return filepath.Join(k.etc(), "log") }
 func (k *kit) mosquittoDir() string { return k.p("/etc/mosquitto/deevnet-kit") }
 
@@ -100,7 +111,8 @@ func (k *kit) cmdInit(args []string) error {
 		return err
 	}
 	st := state{Version: 1, Tenant: name, Index: index}
-	for _, t := range []*string{&st.OperatorToken, &st.IngestToken, &st.ReadToken, &st.BridgeStoreToken, &st.BridgePassword} {
+	for _, t := range []*string{&st.OperatorToken, &st.IngestToken, &st.ReadToken, &st.BridgeStoreToken, &st.BridgePassword,
+		&st.GrafanaAdminPassword, &st.GrafanaSecretKey, &st.DashboardPassword} {
 		if *t, err = randomHex(32); err != nil {
 			return err
 		}
@@ -219,6 +231,9 @@ func (k *kit) renderAllFrom(st state, reload bool) error {
 	if err := k.renderLogStore(st, reload); err != nil {
 		return err
 	}
+	if err := k.writeGrafanaEnv(st); err != nil {
+		return err
+	}
 	return k.writeBridgeEnv(st)
 }
 
@@ -318,7 +333,7 @@ LOG_INGEST_TOKEN=%s
 LOG_READ_TOKEN=%s
 LOG_SELECT_HEADER=X-Deevnet-Partition
 LOG_DEVICE_PARTITION=%d-2
-`, st.Tenant, h, st.Tenant, h, brokerPort, h, logPort, st.IngestToken, st.ReadToken, st.Index)
+`, st.Tenant, h, st.Tenant, h, brokerPort, h, logPort, st.IngestToken, st.ReadToken, st.Index) + dashboardEnv(st, h)
 }
 
 func (k *kit) cmdExport(dir string) error {
@@ -364,6 +379,11 @@ func (k *kit) cmdStatus() error {
 	fmt.Printf("tenant   %s (index %d)\n", st.Tenant, st.Index)
 	fmt.Printf("broker   mqtts://%s:%d\n", h, brokerPort)
 	fmt.Printf("logs     https://%s:%d  (device logs: X-Deevnet-Partition: %d-2)\n", h, logPort, st.Index)
+	if st.DashboardOrg > 0 {
+		fmt.Printf("grafana  https://%s:%d  (login %s; organisation %d)\n", h, dashboardPort, st.Tenant, st.DashboardOrg)
+	} else {
+		fmt.Printf("grafana  https://%s:%d  (not set up yet: systemctl status deevnet-kit-dashboards)\n", h, dashboardPort)
+	}
 	fmt.Println()
 	bad := 0
 	for _, u := range units {

@@ -98,6 +98,10 @@ type Site struct {
 	// endpoint. It is not validated below for that reason.
 	LogEndpoint string
 
+	// The dashboard server tenants log in to (ADR-0024). Optional in the same
+	// way: a site without one gives the tenant no dashboard block.
+	DashboardURL string
+
 	// TrustClasses this site serves, by name. Empty means the site issues no
 	// Wi-Fi keys, which is a legitimate site: one without a wireless
 	// controller, which is what was deployed before CHG-0013.

@@ -23,6 +23,9 @@
 //     name is checked for shape only.
 //   - The CA is the card's own, generated on first boot. Nothing Deevnet holds
 //     can reach this Pi, and nothing on it was issued by Deevnet.
+//   - Grafana's organisation is written by the same package the API uses
+//     (internal/backend/grafana), so its data sources have the same UIDs and a
+//     dashboard moves unchanged. The Pi's owner also holds the admin login.
 package main
 
 import (
@@ -42,6 +45,7 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
   deevnet-kit account rm NAME
   deevnet-kit regen-certs              reissue the server certificate for this hostname
   deevnet-kit render                   rewrite the broker and log store config from state
+  deevnet-kit dashboards               ensure the tenant's Grafana organisation (each boot)
 
 Patterns are RELATIVE to the tenant, as they are on Deevnet: "sensors/+/telemetry"
 becomes "<tenant>/sensors/+/telemetry". --password keeps a device's existing
@@ -79,6 +83,8 @@ func run(args []string) error {
 		return k.cmdRegenCerts()
 	case "render":
 		return k.renderAll(true)
+	case "dashboards":
+		return k.cmdDashboards()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil

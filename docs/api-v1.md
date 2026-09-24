@@ -143,12 +143,19 @@ they reach the tenant's state. `api_token` is present when this call generated o
     "ingest_token": "…",
     "read_token": "…"
   },
+  "dashboard": {
+    "url": "https://dv02obs001v01.mobile.deevnet.net:3000",
+    "org_id": 3,
+    "username": "tdemo",
+    "password": "…"
+  },
   "api_token": "…",
   "steps": [
     { "name": "dns", "ok": true, "updated_at": "…" },
     { "name": "resolver", "ok": true, "updated_at": "…" },
     { "name": "state", "ok": true, "updated_at": "…" },
-    { "name": "log-store", "ok": true, "updated_at": "…" }
+    { "name": "log-store", "ok": true, "updated_at": "…" },
+    { "name": "dashboards", "ok": true, "updated_at": "…" }
   ]
 }
 ```
@@ -164,6 +171,19 @@ under the same rule as the other secrets, and **also on a reconcile**, which is 
 before the store existed is handed them. `endpoint` and `log-store` are absent at a site with no
 store.
 
+`dashboard` is the tenant's login to Grafana (ADR-0024, CHG-0024): its own organisation, where the
+login is an Editor and a member of nothing else. The organisation holds three data sources the
+tenant cannot change, each carrying its log read token, with the same UIDs in every tenant's
+organisation and on the take-home Pi: `deevnet-logs-workloads` (project 0), `deevnet-logs-platform`
+(1) and `deevnet-logs-devices` (2, the default). A dashboard that names them moves between sites
+unchanged. The password appears under the same rule as the log tokens, reconcile included. The
+block is empty, and `dashboards` absent, at a site with no dashboard server; the site must have a
+log store to have one.
+
+Deleting a tenant removes its login and organisation. Grafana 13 cannot delete an organisation
+(grafana/grafana#127386), so until that is fixed the emptied organisation is renamed
+`deleted-<tenant>-<id>` instead, which frees the name for a tenant created again.
+
 ## Read
 
 - `GET /v1/tenants/{name}`: the tenant, without secrets. `404` if not registered. Operator, or the
@@ -174,7 +194,7 @@ store.
 
 `POST /v1/tenants/{name}/reconcile`, operator only, re-ensures every backend with the secrets the registry holds.
 It is the repair after a backend is rebuilt. It returns the tenant with `outcome: reconciled` and no
-secrets, or `502` as create does.
+secrets except the log tokens and the dashboard password, or `502` as create does.
 
 ## Delete
 

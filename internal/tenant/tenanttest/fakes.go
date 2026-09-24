@@ -91,6 +91,10 @@ func (s *Store) SetSecrets(_ context.Context, name string, secrets tenant.Secret
 	return s.update(name, func(r *tenant.Record) { r.Secrets = secrets })
 }
 
+func (s *Store) SetDashboardOrg(_ context.Context, name string, orgID int) error {
+	return s.update(name, func(r *tenant.Record) { r.DashboardOrg = orgID })
+}
+
 func (s *Store) RecordStep(_ context.Context, name, step string, stepErr error) error {
 	return s.update(name, func(r *tenant.Record) {
 		st := tenant.Step{Name: step, OK: stepErr == nil, UpdatedAt: time.Now()}
@@ -471,6 +475,12 @@ type Backends struct {
 	// LogErr, when set, is returned by every Put and Remove: the store being
 	// unreachable while a tenant is applying.
 	LogErr error
+	// DashTenants is what the dashboard server was last told about each tenant,
+	// and DashOrgs the organisation it gave each. DashErr fails every call.
+	DashTenants map[string]tenant.DashTenant
+	DashOrgs    map[string]int
+	DashErr     error
+	dashNext    int
 
 	FailDNS, FailResolver, FailState, FailFabric error
 	FailNetwork, FailCompute, FailWireless       error
@@ -487,6 +497,8 @@ func NewBackends() *Backends {
 		WiFiKeys:       map[string]tenant.WiFiKeySpec{},
 		BrokerAccounts: map[string]tenant.BrokerAccount{},
 		LogTenants:     map[string]tenant.LogTenant{},
+		DashTenants:    map[string]tenant.DashTenant{},
+		DashOrgs:       map[string]int{},
 	}
 }
 
@@ -687,6 +699,7 @@ func MobileSite() tenant.Site {
 		DNSApexNS:         "dv02idn001v01.mobile.deevnet.net",
 		DNSUpdateFrom:     []string{"10.20.99.0/24", "10.20.10.0/24", "10.20.50.0/24"},
 		StateEndpoint:     "http://tfstate.mobile.deevnet.net:9000",
+		DashboardURL:      "https://dv02obs001v01.mobile.deevnet.net:3000",
 		StateBucket:       "tf-state",
 		ResolverForwardTo: "10.20.25.21",
 		WorkloadResolver:  "10.20.50.1",
@@ -758,6 +771,39 @@ func (w *brokerWriter) Remove(_ context.Context, tenantName, name string) error 
 	return nil
 }
 
+type dashboards struct{ b *Backends }
+
+// Dashboards returns a stand-in for the dashboard server. Organisations are
+// numbered from 2, as Grafana's are: 1 is the operator's.
+func (b *Backends) Dashboards() tenant.Dashboards { return &dashboards{b} }
+
+func (d *dashboards) Ensure(_ context.Context, t tenant.DashTenant) (int, error) {
+	if d.b.DashErr != nil {
+		return 0, d.b.DashErr
+	}
+	d.b.mu.Lock()
+	defer d.b.mu.Unlock()
+	org, ok := d.b.DashOrgs[t.Name]
+	if !ok {
+		d.b.dashNext++
+		org = d.b.dashNext + 1
+		d.b.DashOrgs[t.Name] = org
+	}
+	d.b.DashTenants[t.Name] = t
+	return org, nil
+}
+
+func (d *dashboards) Remove(_ context.Context, name string) error {
+	if d.b.DashErr != nil {
+		return d.b.DashErr
+	}
+	d.b.mu.Lock()
+	defer d.b.mu.Unlock()
+	delete(d.b.DashTenants, name)
+	delete(d.b.DashOrgs, name)
+	return nil
+}
+
 type logWriter struct{ b *Backends }
 
 // LogWriter returns a stand-in for the program on the observability store.
@@ -802,6 +848,7 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		Wireless:     b.Wireless(),
 		BrokerWriter: b.BrokerWriter(),
 		LogWriter:    b.LogWriter(),
+		Dashboards:   b.Dashboards(),
 		Tokens:       tokens,
 		Enroller:     &Enroller{},
 	}, st, b
