@@ -59,12 +59,13 @@ func (k *kit) cmdAccount(args []string) error {
 
 func (k *kit) accountAdd(args []string) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return fmt.Errorf("account add NAME [--device DEV] [--publish P]... [--subscribe S]... [--password PW]")
+		return fmt.Errorf("account add NAME [--device DEV] [--publish P]... [--subscribe S]... [--password-file FILE | --password PW]")
 	}
 	name := args[0]
 	fs := flag.NewFlagSet("account add", flag.ContinueOnError)
 	device := fs.String("device", "", "the device this account belongs to; empty for a workload account")
-	password := fs.String("password", "", "keep this password instead of generating one")
+	password := fs.String("password", "", "keep this password instead of generating one (lands in shell history; prefer --password-file)")
+	pwFile := fs.String("password-file", "", "keep the password on this file's first line; - for stdin")
 	var pub, sub multi
 	fs.Var(&pub, "publish", "a topic pattern relative to the tenant (repeatable)")
 	fs.Var(&sub, "subscribe", "a topic pattern relative to the tenant (repeatable)")
@@ -83,7 +84,16 @@ func (k *kit) accountAdd(args []string) error {
 		return fmt.Errorf("account %q exists; deevnet-kit account rm %s first", name, name)
 	}
 
+	if *password != "" && *pwFile != "" {
+		return fmt.Errorf("--password or --password-file, not both")
+	}
 	pw := *password
+	if *pwFile != "" {
+		if pw, err = readPasswordFile(*pwFile); err != nil {
+			return err
+		}
+	}
+	kept := pw != ""
 	if pw == "" {
 		if pw, err = randomHex(16); err != nil {
 			return err
@@ -100,7 +110,7 @@ func (k *kit) accountAdd(args []string) error {
 	}
 
 	fmt.Printf("username  %s\n", username(st, name))
-	if *password == "" {
+	if !kept {
 		// Printed once, as the API returns it once. The kit keeps only the hash.
 		fmt.Printf("password  %s\n", pw)
 	}

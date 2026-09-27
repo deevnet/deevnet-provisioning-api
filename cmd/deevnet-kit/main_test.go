@@ -54,21 +54,28 @@ func TestBootConfig(t *testing.T) {
 		{"index=two\n", "", 0, true},
 		{"colour=blue\n", "", 0, true},
 		{"just words\n", "", 0, true},
+		{"hostname=bench1\n", "pi", 1, false},
+		{"hostname=-bad\n", "", 0, true},
+		{"hostname=has.dot\n", "", 0, true},
+		{"wifi_ssid=Home\nwifi_psk=longenough\nwifi_country=us\n", "pi", 1, false},
+		{"wifi_ssid=Home\nwifi_psk=longenough\n", "", 0, true}, // no country: the radio stays off
+		{"wifi_ssid=Home\nwifi_psk=short\nwifi_country=US\n", "", 0, true},
+		{"wifi_psk=longenough\n", "", 0, true}, // a password for no network
 	}
 	for _, c := range cases {
-		name, index, err := readBootConfig(bootConfig(t, c.body))
+		bc, err := readBootConfig(bootConfig(t, c.body))
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("%q: accepted, want an error", c.body)
 			}
 			continue
 		}
-		if err != nil || name != c.tenant || index != c.index {
-			t.Errorf("%q: got %q %d %v, want %q %d", c.body, name, index, err, c.tenant, c.index)
+		if err != nil || bc.Tenant != c.tenant || bc.Index != c.index {
+			t.Errorf("%q: got %q %d %v, want %q %d", c.body, bc.Tenant, bc.Index, err, c.tenant, c.index)
 		}
 	}
-	if name, index, err := readBootConfig(filepath.Join(t.TempDir(), "absent")); err != nil || name != "pi" || index != 1 {
-		t.Errorf("a missing file should default to pi/1, got %q %d %v", name, index, err)
+	if bc, err := readBootConfig(filepath.Join(t.TempDir(), "absent")); err != nil || bc.Tenant != "pi" || bc.Index != 1 {
+		t.Errorf("a missing file should default to pi/1, got %q %d %v", bc.Tenant, bc.Index, err)
 	}
 }
 
@@ -114,7 +121,7 @@ func TestInitWritesEverythingTheServicesRead(t *testing.T) {
 	if st.IngestToken == st.ReadToken || len(st.IngestToken) != 64 {
 		t.Errorf("tokens are not distinct 64-hex values")
 	}
-	env := kitEnv(st, "kit1.local")
+	env := kitEnv(st, "kit1.local", appCreds{})
 	for _, want := range []string{"DEEVNET_TENANT=tdemo", "MQTT_HOST=kit1.local", "MQTT_PORT=8883",
 		"LOG_ENDPOINT=https://kit1.local:8427", "LOG_DEVICE_PARTITION=3-2", "LOG_INGEST_TOKEN=" + st.IngestToken} {
 		if !strings.Contains(env, want) {
@@ -288,11 +295,11 @@ func TestInitWritesGrafanaSecretsAndKitEnvWaitsForTheOrg(t *testing.T) {
 		t.Errorf("grafana.env is %v, want 0600", fi.Mode().Perm())
 	}
 
-	if env := kitEnv(st, "bench1.local"); strings.Contains(env, "GRAFANA_AUTH") {
+	if env := kitEnv(st, "bench1.local", appCreds{}); strings.Contains(env, "GRAFANA_AUTH") {
 		t.Error("kit.env names a Grafana login before the organisation exists")
 	}
 	st.DashboardOrg = 2
-	env := kitEnv(st, "bench1.local")
+	env := kitEnv(st, "bench1.local", appCreds{})
 	for _, want := range []string{
 		"GRAFANA_URL=https://bench1.local:3000\n",
 		"GRAFANA_AUTH=bench1:" + st.DashboardPassword + "\n",

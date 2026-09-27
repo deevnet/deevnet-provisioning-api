@@ -37,10 +37,13 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
 
   deevnet-kit init [--config FILE]     first boot: tenant, CA, tokens, service config
   deevnet-kit status                   services, endpoints and accounts
-  deevnet-kit env                      print the app's environment (kit.env)
-  deevnet-kit export DIR               write kit.env and site-ca.pem into DIR
+  deevnet-kit env [--app NAME --password-file FILE]
+                                       print the app's environment (kit.env)
+  deevnet-kit export DIR [--app NAME --password-file FILE]
+                                       write kit.env and site-ca.pem into DIR; with
+                                       --app, kit.env carries that account's login
   deevnet-kit account add NAME [--device DEV] [--publish P]... [--subscribe S]...
-                                       [--password PW]
+                                       [--password-file FILE | --password PW]
   deevnet-kit account list
   deevnet-kit account rm NAME
   deevnet-kit regen-certs              reissue the server certificate for this hostname
@@ -50,8 +53,10 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
                                        MQTT, an app log, and both read back through Grafana
 
 Patterns are RELATIVE to the tenant, as they are on Deevnet: "sensors/+/telemetry"
-becomes "<tenant>/sensors/+/telemetry". --password keeps a device's existing
-password, so a device moved from Deevnet needs only the new broker host and CA.
+becomes "<tenant>/sensors/+/telemetry". --password-file (first line; - for
+stdin) keeps an existing password, so a device or app moved from Deevnet needs
+only the new broker host and CA. --password does the same, but leaves the
+password in your shell history.
 `
 
 func main() {
@@ -73,12 +78,9 @@ func run(args []string) error {
 	case "status":
 		return k.cmdStatus()
 	case "env":
-		return k.cmdEnv(os.Stdout)
+		return k.cmdEnv(os.Stdout, args[1:])
 	case "export":
-		if len(args) != 2 {
-			return fmt.Errorf("export takes one directory")
-		}
-		return k.cmdExport(args[1])
+		return k.cmdExport(args[1:])
 	case "account":
 		return k.cmdAccount(args[1:])
 	case "regen-certs":

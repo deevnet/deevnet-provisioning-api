@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -106,11 +107,20 @@ func (k *kit) cmdInit(args []string) error {
 		return nil
 	}
 
-	name, index, err := readBootConfig(*cfgPath)
+	bc, err := readBootConfig(*cfgPath)
 	if err != nil {
 		return err
 	}
-	st := state{Version: 1, Tenant: name, Index: index}
+	// The host name first: the server certificate below names
+	// <hostname>.local, and two cards at one meetup must not both be
+	// raspberrypi.local.
+	if err := k.applyHostname(bc.Hostname); err != nil {
+		return err
+	}
+	if err := k.applyWiFi(bc, *cfgPath); err != nil {
+		return err
+	}
+	st := state{Version: 1, Tenant: bc.Tenant, Index: bc.Index}
 	for _, t := range []*string{&st.OperatorToken, &st.IngestToken, &st.ReadToken, &st.BridgeStoreToken, &st.BridgePassword,
 		&st.GrafanaAdminPassword, &st.GrafanaSecretKey, &st.DashboardPassword} {
 		if *t, err = randomHex(32); err != nil {
@@ -144,16 +154,27 @@ func (k *kit) cmdInit(args []string) error {
 	return nil
 }
 
+// bootSettings is what the owner wrote on the boot partition.
+type bootSettings struct {
+	Tenant string
+	Index  int
+	// Hostname, when set, replaces raspberrypi: the card is <hostname>.local.
+	Hostname string
+	// Wi-Fi, when WiFiSSID is set. The country is required with it: Raspberry
+	// Pi OS keeps the radio blocked until one is set.
+	WiFiSSID, WiFiPSK, WiFiCountry string
+}
+
 // readBootConfig reads key=value lines. A missing file is not an error: the
 // card still has to come up, as tenant "pi".
-func readBootConfig(path string) (string, int, error) {
-	name, index := defaultTenant, 1
+func readBootConfig(path string) (bootSettings, error) {
+	bc := bootSettings{Tenant: defaultTenant, Index: 1}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return name, index, nil
+		return bc, nil
 	}
 	if err != nil {
-		return "", 0, err
+		return bootSettings{}, err
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -164,32 +185,63 @@ func readBootConfig(path string) (string, int, error) {
 		}
 		key, val, ok := strings.Cut(line, "=")
 		if !ok {
-			return "", 0, fmt.Errorf("%s: %q is not key=value", path, line)
+			return bootSettings{}, fmt.Errorf("%s: %q is not key=value", path, line)
 		}
 		key, val = strings.TrimSpace(key), strings.TrimSpace(val)
 		switch key {
 		case "tenant":
 			if val != "" {
-				name = val
+				bc.Tenant = val
 			}
 		case "index":
 			if val != "" {
-				if index, err = strconv.Atoi(val); err != nil {
-					return "", 0, fmt.Errorf("%s: index %q is not a number", path, val)
+				if bc.Index, err = strconv.Atoi(val); err != nil {
+					return bootSettings{}, fmt.Errorf("%s: index %q is not a number", path, val)
 				}
 			}
+		case "hostname":
+			bc.Hostname = strings.ToLower(val)
+		case "wifi_ssid":
+			bc.WiFiSSID = val
+		case "wifi_psk":
+			bc.WiFiPSK = val
+		case "wifi_country":
+			bc.WiFiCountry = strings.ToUpper(val)
 		default:
-			return "", 0, fmt.Errorf("%s: unknown key %q", path, key)
+			return bootSettings{}, fmt.Errorf("%s: unknown key %q", path, key)
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return "", 0, err
+		return bootSettings{}, err
 	}
-	if !tenant.ValidName(name) {
-		return "", 0, fmt.Errorf("%s: tenant %q is not a tenant name (1-8 lowercase alphanumerics, starting with a letter)", path, name)
+	if !tenant.ValidName(bc.Tenant) {
+		return bootSettings{}, fmt.Errorf("%s: tenant %q is not a tenant name (1-8 lowercase alphanumerics, starting with a letter)", path, bc.Tenant)
 	}
-	return name, index, nil
+	if bc.Hostname != "" && !hostnameRE.MatchString(bc.Hostname) {
+		return bootSettings{}, fmt.Errorf("%s: hostname %q is not a host name (1-63 letters, digits or dashes, not starting or ending with a dash)", path, bc.Hostname)
+	}
+	// An SSID with its password blanked is one applied on an earlier boot:
+	// scrubPSK leaves it that way, and a first boot that stopped part way
+	// reads this file again.
+	if bc.WiFiSSID != "" && bc.WiFiPSK != "" {
+		switch {
+		case len(bc.WiFiSSID) > 32:
+			return bootSettings{}, fmt.Errorf("%s: wifi_ssid is longer than 32 bytes", path)
+		case len(bc.WiFiPSK) < 8 || len(bc.WiFiPSK) > 63:
+			return bootSettings{}, fmt.Errorf("%s: wifi_psk must be 8 to 63 characters", path)
+		case !countryRE.MatchString(bc.WiFiCountry):
+			return bootSettings{}, fmt.Errorf("%s: wifi_country must be a two-letter country code, such as US; the radio stays off without one", path)
+		}
+	} else if bc.WiFiSSID == "" && bc.WiFiPSK != "" {
+		return bootSettings{}, fmt.Errorf("%s: wifi_psk is set but wifi_ssid is not", path)
+	}
+	return bc, nil
 }
+
+var (
+	hostnameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	countryRE  = regexp.MustCompile(`^[A-Z]{2}$`)
+)
 
 // validState applies the log store's own contract to what init chose, so a
 // state the renderer would refuse is refused here, before anything is written.
@@ -310,18 +362,25 @@ func host() string {
 	return h + ".local"
 }
 
-func (k *kit) cmdEnv(w io.Writer) error {
+func (k *kit) cmdEnv(w io.Writer, args []string) error {
+	rest, creds, err := k.appFlags("env", args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 0 {
+		return fmt.Errorf("env takes no arguments but --app and --password-file")
+	}
 	st, err := k.loadState()
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(w, kitEnv(st, host()))
+	_, err = io.WriteString(w, kitEnv(st, host(), creds))
 	return err
 }
 
 // kitEnv is the app's whole view of this Pi. The names are the tenant guide's;
 // the same file built from Terraform outputs points the same app at Deevnet.
-func kitEnv(st state, h string) string {
+func kitEnv(st state, h string, app appCreds) string {
 	return fmt.Sprintf(`# deevnet-kit - tenant %s on %s
 # The same names, filled from terraform outputs, point this app at Deevnet.
 DEEVNET_TENANT=%s
@@ -333,10 +392,23 @@ LOG_INGEST_TOKEN=%s
 LOG_READ_TOKEN=%s
 LOG_SELECT_HEADER=X-Deevnet-Partition
 LOG_DEVICE_PARTITION=%d-2
-`, st.Tenant, h, st.Tenant, h, brokerPort, h, logPort, st.IngestToken, st.ReadToken, st.Index) + dashboardEnv(st, h)
+`, st.Tenant, h, st.Tenant, h, brokerPort, h, logPort, st.IngestToken, st.ReadToken, st.Index) + appEnv(app) + dashboardEnv(st, h)
 }
 
-func (k *kit) cmdExport(dir string) error {
+func (k *kit) cmdExport(args []string) error {
+	// The directory first, then the flags: flag parsing stops at the first
+	// non-flag, and "export DIR --app ..." is how people will type it.
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("export DIR [--app NAME --password-file FILE]")
+	}
+	dir := args[0]
+	rest, creds, err := k.appFlags("export", args[1:])
+	if err != nil {
+		return err
+	}
+	if len(rest) != 0 {
+		return fmt.Errorf("export takes one directory")
+	}
 	st, err := k.loadState()
 	if err != nil {
 		return err
@@ -349,7 +421,7 @@ func (k *kit) cmdExport(dir string) error {
 		return err
 	}
 	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, "site-ca.pem")
-	if err := writeFile(envPath, []byte(kitEnv(st, host())), 0o600); err != nil {
+	if err := writeFile(envPath, []byte(kitEnv(st, host(), creds)), 0o600); err != nil {
 		return err
 	}
 	if err := writeFile(caPath, ca, 0o644); err != nil {
