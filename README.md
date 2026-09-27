@@ -62,7 +62,7 @@ API refuses to start if any is empty.
 | `DEEVNET_DNS_UPDATE_SERVER` | `tdns.mobile.deevnet.net` | where tenants send RFC 2136 updates |
 | `DEEVNET_DNS_APEX_NS` | `dv02idn001v01.mobile.deevnet.net` | apex NS and SOA primary (ADR-0005) |
 | `DEEVNET_DNS_UPDATE_FROM` | `10.20.99.0/24,10.20.10.0/24,10.20.50.0/24` | networks that may attempt an update |
-| `DEEVNET_STATE_ENDPOINT`, `DEEVNET_STATE_BUCKET` | `http://tfstate.mobile.deevnet.net:9000`, `tf-state` | the offered state store |
+| `DEEVNET_STATE_ENDPOINT`, `DEEVNET_STATE_BUCKET` | `https://tfstate.mobile.deevnet.net:9000`, `tf-state` | the offered state store |
 | `DEEVNET_RESOLVER_FORWARD_TO` | `10.20.25.21` | the address the router forwards tenant zones to |
 | `POWERDNS_API_URL` | `http://10.20.25.21:8081` | PowerDNS HTTP API |
 | `OPNSENSE_API_URL` | `https://10.20.25.1/api` | the core router |
@@ -97,7 +97,8 @@ KV v2 secret.
 | `DEEVNET_ENROLLMENT_TTL` | `72h` | how long an enrollment token lives |
 | `DEEVNET_API_TLS_CERT`, `DEEVNET_API_TLS_KEY` | | serve TLS; set both or neither |
 | `OPNSENSE_INSECURE_TLS`, `PROXMOX_INSECURE_TLS` | `true` | self-signed certificates on those devices |
-| `MINIO_ADMIN_TLS` | `false` | |
+| `MINIO_ADMIN_TLS` | `false` | `true` when the state store serves TLS (CHG-0030) |
+| `MINIO_ADMIN_CACERT` | | the site CA the state store must verify against; required with `MINIO_ADMIN_TLS` |
 
 **Wi-Fi keys are optional** (ADR-0012 §3). `OMADA_API_URL` turns them on; leave it unset and the API
 issues none and the `wifi-keys` routes refuse with a reason. That is not a degraded state: a site

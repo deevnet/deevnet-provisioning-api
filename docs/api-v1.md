@@ -141,7 +141,7 @@ they reach the tenant's state. `api_token` is present when this call generated o
     "tsig_secret": "…"
   },
   "state": {
-    "endpoint": "http://tfstate.mobile.deevnet.net:9000",
+    "endpoint": "https://tfstate.mobile.deevnet.net:9000",
     "bucket": "tf-state",
     "key_prefix": "tenants/tdemo/",
     "access_key": "tdemo",
