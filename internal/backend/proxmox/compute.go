@@ -75,8 +75,11 @@ func (c *Client) configureWorkload(ctx context.Context, w tenant.WorkloadSpec, s
 		cfg["nameserver"] = w.Nameserver
 	}
 	if len(w.SSHKeys) > 0 {
-		// Proxmox takes the authorized_keys file URL-encoded in one parameter.
-		cfg["sshkeys"] = url.QueryEscape(strings.Join(w.SSHKeys, "\n") + "\n")
+		// Proxmox takes the authorized_keys file URL-encoded in one parameter
+		// and decodes it with uri_unescape, which turns %XX back but leaves
+		// '+' as '+'. QueryEscape writes a space as '+', so every key arrived
+		// with its spaces gone; spell spaces %20 (a literal '+' is already %2B).
+		cfg["sshkeys"] = strings.ReplaceAll(url.QueryEscape(strings.Join(w.SSHKeys, "\n")+"\n"), "+", "%20")
 	}
 	if w.CIUser != "" {
 		cfg["ciuser"] = w.CIUser
