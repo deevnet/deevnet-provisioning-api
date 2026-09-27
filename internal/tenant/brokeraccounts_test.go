@@ -230,6 +230,24 @@ func TestDeleteRemovesFromTheBrokerAndTheRegistry(t *testing.T) {
 	}
 }
 
+// An account left in the broker when its tenant is deleted would belong to
+// nobody and keep working - and a tenant later admitted under the same name
+// would inherit it, prefix and all.
+func TestDeletingATenantRemovesItsBrokerAccounts(t *testing.T) {
+	svc, _, b := tenanttest.NewService()
+	ready(t, svc, "eds")
+	ctx := context.Background()
+	if _, err := svc.CreateBrokerAccount(ctx, "eds", acct()); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Delete(ctx, "eds"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.BrokerAccounts) != 0 {
+		t.Errorf("accounts orphaned in the broker: %v", b.BrokerAccounts)
+	}
+}
+
 // A site with no broker is a legitimate site - every site was one before
 // CHG-0015 - and must refuse with a reason rather than panic.
 func TestASiteWithNoBrokerRefusesWithAReason(t *testing.T) {

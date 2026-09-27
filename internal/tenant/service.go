@@ -357,11 +357,30 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return err
 	}
 
+	// Its broker accounts too, for the same reason: the row cascades away, and
+	// an account the broker still held would keep working for nobody - or for
+	// the next tenant admitted under this name, whose prefix it already has.
+	brokerAccounts, err := s.Store.ListBrokerAccounts(ctx, name)
+	if err != nil {
+		return err
+	}
+
 	// Reverse of create: stop resolving the zones before they disappear.
 	steps := []struct {
 		name string
 		run  func() error
 	}{
+		{StepBroker, func() error {
+			if s.BrokerWriter == nil {
+				return nil
+			}
+			for _, a := range brokerAccounts {
+				if err := s.BrokerWriter.Remove(ctx, name, a.Name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
 		{StepWiFiKey, func() error {
 			for _, k := range wifiKeys {
 				if err := s.removeKeyFromController(ctx, k); err != nil {

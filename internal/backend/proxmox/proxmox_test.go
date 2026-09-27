@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -105,4 +106,41 @@ func TestClaimsAgainstARealNode(t *testing.T) {
 		t.Fatalf("claims: %v", err)
 	}
 	t.Logf("fabric claims: %v", claims)
+}
+
+// Proxmox unescapes sshkeys with URI::Escape's uri_unescape: %XX becomes the
+// byte and '+' stays '+'. url.PathUnescape does the same, so what it yields
+// is what lands in the workload's authorized_keys.
+func TestSSHKeysReachProxmoxIntact(t *testing.T) {
+	keys := []string{
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGx+a/b=c tenant@laptop",
+		"ssh-rsa AAAAB3NzaC1yc2E+/== operator key",
+	}
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/config") {
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			raw := r.PostForm.Get("sshkeys")
+			dec, err := url.PathUnescape(raw)
+			if err != nil {
+				t.Fatalf("sshkeys %q: %v", raw, err)
+			}
+			got = dec
+		}
+		_, _ = w.Write([]byte(`{"data":null}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "t@pve!x", "s", tenanttest.MobileSite(), false)
+	w := tenant.WorkloadSpec{Node: "hv02", VMID: 2040, Cores: 2, MemoryMB: 2048,
+		MAC: "02:00:00:00:00:01", Bridge: "tdemo0", Address: "10.20.129.10/24", Gateway: "10.20.129.1",
+		SSHKeys: keys, CIUser: "tenant"}
+	if err := c.configureWorkload(context.Background(), w, false); err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Join(keys, "\n") + "\n"; got != want {
+		t.Fatalf("authorized_keys\n got %q\nwant %q", got, want)
+	}
 }

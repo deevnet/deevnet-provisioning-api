@@ -202,7 +202,7 @@ secrets except the log tokens and the dashboard password, or `502` as create doe
 
 | Status | When |
 |---|---|
-| `204` | the resolver forwards, zones, TSIG key, state user and policy are removed, then the registry row. State objects stay in the bucket |
+| `204` | the broker accounts, resolver forwards, zones, TSIG key, state user and policy are removed, then the registry row. State objects stay in the bucket |
 | `409` | the fabric still carries a zone of this name. The tenant destroys its own resources first |
 | `404` | not registered |
 | `502` | a backend step failed. The tenant is left `deleting`, and a second delete resumes it |
@@ -225,6 +225,9 @@ A workload is a VM in the tenant's network (ADR-0015 §12). The operator or the 
   - **MAC:** derived from the VMID (`standards/mac-naming`)
   - **address:** `.10 + ordinal` in the tenant's subnet
   - **node, template, storage:** the site's; the template is the newest by name prefix
+- **Keys land on the site's tenant account,** which the response names as `login_user`: the tenant
+  logs in with `ssh <login_user>@<fqdn>` and the matching private key, which never leaves the
+  tenant (ADR-0028). The keys are written at first boot; changing them means rebuilding the workload.
 - **It also publishes** `<name>.<tenant zone>` and the matching PTR.
 - **Calling it again** for the same name re-applies: the identity stays, the sizing is taken.
 

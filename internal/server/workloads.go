@@ -34,6 +34,7 @@ type workloadView struct {
 	Tenant    string    `json:"tenant"`
 	Name      string    `json:"name"`
 	FQDN      string    `json:"fqdn"`
+	LoginUser string    `json:"login_user,omitempty"`
 	Status    string    `json:"status"`
 	Ordinal   int       `json:"ordinal"`
 	VMID      int       `json:"vmid"`
@@ -51,6 +52,7 @@ func (h *tenantHandlers) workloadView(w tenant.Workload) workloadView {
 		Tenant:    w.Tenant,
 		Name:      w.Name,
 		FQDN:      w.Name + "." + h.svc.Site.Zone(w.Tenant),
+		LoginUser: h.svc.Site.CIUser,
 		Status:    string(w.Status),
 		Ordinal:   w.Ordinal,
 		VMID:      w.VMID,
