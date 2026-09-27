@@ -34,6 +34,9 @@ type WiFiKeyRequest struct {
 	// copy and is putting it back after the API lost its own (ADR-0012 §5).
 	// A tenant never chooses a new key's value.
 	PSK string
+	// MAC, optional, binds the key to one client (ADR-0029 §3). The request is
+	// the truth: re-applying without one unbinds.
+	MAC string
 }
 
 // IssuedWiFiKey is a key plus the site facts a tenant needs to use it. SSID and
@@ -72,6 +75,13 @@ func (s *Service) CreateWiFiKey(ctx context.Context, tenantName string, req WiFi
 	if req.PSK != "" && !ValidPSK(req.PSK) {
 		return IssuedWiFiKey{}, invalid("psk must be 8 to 63 visible ASCII characters")
 	}
+	if req.MAC != "" {
+		m, ok := NormalizeMAC(req.MAC)
+		if !ok {
+			return IssuedWiFiKey{}, invalid("mac %q is not a MAC address", req.MAC)
+		}
+		req.MAC = m
+	}
 
 	existing, err := s.Store.GetWiFiKey(ctx, tenantName, req.Name)
 	switch {
@@ -101,6 +111,7 @@ func (s *Service) CreateWiFiKey(ctx context.Context, tenantName string, req WiFi
 		Name:       req.Name,
 		TrustClass: req.TrustClass,
 		PSK:        psk,
+		MAC:        req.MAC,
 		Status:     StatusProvisioning,
 	}
 	// The row goes down first, so a key written to the controller is never one
@@ -114,6 +125,9 @@ func (s *Service) CreateWiFiKey(ctx context.Context, tenantName string, req WiFi
 	})
 
 	spec := WiFiKeySpec{SSID: tc.SSID, Name: tenantName + "-" + k.Name, PSK: psk, VLAN: tc.VLAN}
+	if req.MAC != "" {
+		spec.MAC = ControllerMAC(req.MAC)
+	}
 	if err := s.Wireless.EnsureKey(ctx, spec); err != nil {
 		s.logger().Error("issuing wifi key", "tenant", tenantName, "key", k.Name, "err", err)
 		return IssuedWiFiKey{WiFiKey: k, SSID: tc.SSID, VLAN: tc.VLAN}, &StepError{Step: StepWiFiKey, Err: err}

@@ -295,6 +295,9 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		if site.TrustClasses, err = parseTrustClasses(getenv("DEEVNET_IOT_TRUST_CLASSES")); err != nil {
 			return wiring{}, fmt.Errorf("DEEVNET_IOT_TRUST_CLASSES: %w", err)
 		}
+		// The trust class an admission issues its tenant developer key in
+		// (ADR-0029 §1). Optional; Site.Validate refuses one not served.
+		site.AdmissionClass = getenv("DEEVNET_ADMISSION_WIFI_CLASS")
 		for _, k := range omadaCredentials {
 			if creds[k] == "" {
 				return wiring{}, fmt.Errorf("OMADA_API_URL is set, but %s is missing from the backend credentials", k)

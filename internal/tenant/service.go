@@ -148,9 +148,26 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Result, error)
 	rec, err := s.Store.Get(ctx, req.Name)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return s.createNew(ctx, req)
+		res, err := s.createNew(ctx, req)
+		if err == nil {
+			// Best effort: the key already works in the controller, so a
+			// failure here costs bookkeeping, not access. The next create or
+			// resume adopts it.
+			if aerr := s.adoptAdmissionKey(ctx, req.Name); aerr != nil {
+				s.logger().Error("adopting admission key", "tenant", req.Name, "err", aerr)
+			}
+		}
+		return res, err
 	case err != nil:
 		return Result{}, err
+	}
+
+	if rec.Status == StatusProvisioning {
+		defer func() {
+			if aerr := s.adoptAdmissionKey(ctx, req.Name); aerr != nil {
+				s.logger().Error("adopting admission key", "tenant", req.Name, "err", aerr)
+			}
+		}()
 	}
 
 	switch rec.Status {
@@ -900,16 +917,28 @@ type Admission struct {
 	Name            string
 	EnrollmentToken string
 	ExpiresAt       time.Time
+	// WiFi is the tenant developer network key issued with the token, nil at
+	// a site that issues none (ADR-0029 §1).
+	WiFi *AdmissionWiFi
 }
 
 // Admit lets a tenant create itself: it wraps the name behind a single-use
 // enrollment token (ADR-0015 §10). A registered name is refused.
-func (s *Service) Admit(ctx context.Context, name string) (Admission, error) {
+//
+// mac, when not empty, binds the admission's Wi-Fi key to that one laptop.
+func (s *Service) Admit(ctx context.Context, name, mac string) (Admission, error) {
 	if s.Enroller == nil {
 		return Admission{}, ErrNoEnrollment
 	}
 	if !ValidName(name) {
 		return Admission{}, invalid("name must be 1-8 lowercase alphanumerics starting with a letter")
+	}
+	if mac != "" {
+		m, ok := NormalizeMAC(mac)
+		if !ok {
+			return Admission{}, invalid("mac %q is not a MAC address", mac)
+		}
+		mac = m
 	}
 	if _, err := s.Store.Get(ctx, name); err == nil {
 		return Admission{}, ErrExists
@@ -924,8 +953,14 @@ func (s *Service) Admit(ctx context.Context, name string) (Admission, error) {
 	if err != nil {
 		return Admission{}, &StepError{Step: "enrollment", Err: err}
 	}
-	s.audit(ctx, "admit", name, map[string]any{"expires_at": expires.UTC().Format(time.RFC3339)})
-	return Admission{Name: name, EnrollmentToken: tok, ExpiresAt: expires}, nil
+	wifi, err := s.issueAdmissionKey(ctx, name, mac)
+	if err != nil {
+		return Admission{}, err
+	}
+	s.audit(ctx, "admit", name, map[string]any{
+		"expires_at": expires.UTC().Format(time.RFC3339), "wifi_key": wifi != nil, "bound": mac != "",
+	})
+	return Admission{Name: name, EnrollmentToken: tok, ExpiresAt: expires, WiFi: wifi}, nil
 }
 
 // Redeem spends an enrollment token for the tenant it was issued for. It is

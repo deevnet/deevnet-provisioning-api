@@ -107,6 +107,11 @@ type Site struct {
 	// controller, which is what was deployed before CHG-0013.
 	TrustClasses map[string]TrustClass
 
+	// AdmissionClass is the trust class an admission issues a key in, so a
+	// tenant developer can join the tenant developer network before the
+	// tenant exists (ADR-0029 §1). Empty: admission issues no key.
+	AdmissionClass string
+
 	// Where the core router's resolver forwards tenant zones: the address of
 	// the tenant DNS server. Authoritative, so it answers tenant zones and
 	// REFUSES everything else - which is what a forward target is for, and
@@ -176,6 +181,11 @@ func (s Site) Validate() error {
 			return fmt.Errorf("trust class %q has no SSID", name)
 		case tc.VLAN < 1 || tc.VLAN > 4094:
 			return fmt.Errorf("trust class %q has VLAN %d, outside 1-4094", name, tc.VLAN)
+		}
+	}
+	if s.AdmissionClass != "" {
+		if _, ok := s.TrustClasses[s.AdmissionClass]; !ok {
+			return fmt.Errorf("admission class %q is not a served trust class", s.AdmissionClass)
 		}
 	}
 	return nil

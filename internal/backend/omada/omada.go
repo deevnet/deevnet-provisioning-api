@@ -328,7 +328,7 @@ func (c *Client) EnsureKey(ctx context.Context, k tenant.WiFiKeySpec) error {
 		if e.Name != k.Name {
 			continue
 		}
-		if e.PSK == k.PSK && e.VLAN == k.VLAN {
+		if e.PSK == k.PSK && e.VLAN == k.VLAN && e.MAC == k.MAC {
 			needsWrite = false
 			break
 		}
@@ -345,7 +345,7 @@ func (c *Client) EnsureKey(ctx context.Context, k tenant.WiFiKeySpec) error {
 		break
 	}
 	if needsWrite {
-		if err := c.addKey(ctx, siteID, profile.ID, pskEntry{Name: k.Name, PSK: k.PSK, VLAN: k.VLAN}); err != nil {
+		if err := c.addKey(ctx, siteID, profile.ID, pskEntry{Name: k.Name, PSK: k.PSK, VLAN: k.VLAN, MAC: k.MAC}); err != nil {
 			return err
 		}
 	}

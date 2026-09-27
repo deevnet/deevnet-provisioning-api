@@ -505,7 +505,7 @@ func TestRestoreRefusesATokenIssuedForAnotherTenant(t *testing.T) {
 
 func TestAdmissionIsSingleUseAndNamed(t *testing.T) {
 	svc, _, _ := tenanttest.NewService()
-	adm, err := svc.Admit(ctx, "tdemo")
+	adm, err := svc.Admit(ctx, "tdemo", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +517,7 @@ func TestAdmissionIsSingleUseAndNamed(t *testing.T) {
 		t.Fatalf("redeem after a mismatch: %v, want ErrNotRedeemable", err)
 	}
 
-	adm, _ = svc.Admit(ctx, "tdemo")
+	adm, _ = svc.Admit(ctx, "tdemo", "")
 	if err := svc.Redeem(ctx, adm.EnrollmentToken, "tdemo"); err != nil {
 		t.Fatalf("redeem: %v", err)
 	}
@@ -528,12 +528,12 @@ func TestAdmissionIsSingleUseAndNamed(t *testing.T) {
 	if _, err := svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Admit(ctx, "tdemo"); !errors.Is(err, tenant.ErrExists) {
+	if _, err := svc.Admit(ctx, "tdemo", ""); !errors.Is(err, tenant.ErrExists) {
 		t.Fatalf("admitting a registered name: %v, want ErrExists", err)
 	}
 
 	svc.Enroller = nil
-	if _, err := svc.Admit(ctx, "grooveiq"); !errors.Is(err, tenant.ErrNoEnrollment) {
+	if _, err := svc.Admit(ctx, "grooveiq", ""); !errors.Is(err, tenant.ErrNoEnrollment) {
 		t.Fatalf("admit without an enroller: %v", err)
 	}
 }

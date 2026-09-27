@@ -26,17 +26,28 @@ OpenBao, not in the registry.
 `POST /v1/admissions`, operator only.
 
 ```json
-{ "name": "tdemo" }
+{ "name": "tdemo", "mac": "AA-BB-CC-00-11-22" }
 ```
 
-`201`:
+`mac` is optional. `201`:
 
 ```json
-{ "name": "tdemo", "enrollment_token": "s.…", "expires_at": "2026-09-20T16:58:53Z" }
+{ "name": "tdemo", "enrollment_token": "s.…", "expires_at": "2026-09-20T16:58:53Z",
+  "wifi": { "ssid": "DVNTM-TD", "psk": "…", "mac": "aa:bb:cc:00:11:22" } }
 ```
 
 The token is OpenBao response wrapping: single-use, and valid for `DEEVNET_ENROLLMENT_TTL`
-(default 72h). Deliver it to the tenant repository age-encrypted (ADR-0012 §9).
+(default 72h). The operator hands it over by hand, over a channel trusted with a password.
+
+**`wifi` is the tenant's key for the tenant developer network** (ADR-0029), which the tenant needs to
+reach this API at all, so it cannot come from the tenant's own apply. It is issued in the trust class
+`DEEVNET_ADMISSION_WIFI_CLASS` names, and is absent at a site that sets none.
+- **`mac` binds it to that one laptop.** Any of the three common spellings is accepted.
+- **Admitting the name again** issues a new key, and the previous one stops working.
+- **When the tenant creates itself**, the key becomes its own Wi-Fi key `admission`: listed, deletable,
+  and revoked when the tenant is deleted.
+- **`DELETE /v1/admissions/{name}`**, operator only, revokes the key of an admission never used. `204`,
+  or `404` when there is none. The enrollment token itself just expires.
 - **Presenting it for another name spends it** and answers `401`.
 - **Admitting a registered name** answers `409`.
 - **Without OpenBao configured**, admissions answer `501`, and only the operator creates tenants.
@@ -325,6 +336,9 @@ flashes with it; the substrate does not know those devices individually.
   mobile and `DVNT-IOT` at home.
 - **Calling it again** keeps the key that is already issued. It does not mint a new one — every
   device flashed with the old one would stop associating.
+- **`mac`, optional, binds the key to one client** (ADR-0029): the controller then admits it from that
+  MAC only. Re-applying without `mac` unbinds it. It suits the tenant developer network's
+  `tenant_dev` class, one key per laptop; a key shared by many devices is left unbound.
 - **`psk` is supplied only to restore** a key the tenant already holds, after the API has lost its
   copy (ADR-0012 §5). The controller is then made to match the devices, rather than the devices
   having to be reflashed. It must be 8 to 63 visible ASCII characters.
