@@ -144,3 +144,29 @@ func TestSSHKeysReachProxmoxIntact(t *testing.T) {
 		t.Fatalf("authorized_keys\n got %q\nwant %q", got, want)
 	}
 }
+
+// A workload boots straight to ready. With Proxmox's default (ciupgrade on),
+// cloud-init runs a full package upgrade on first boot - hundreds of packages,
+// minutes long, and on CHG-0028's eds rebuild it took the network down half
+// way and never came back. Updates are the tenant's, on its own schedule.
+func TestWorkloadsDoNotUpgradeOnFirstBoot(t *testing.T) {
+	var got string
+	var set bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/config") {
+			_ = r.ParseForm()
+			got, set = r.PostForm.Get("ciupgrade"), r.PostForm.Has("ciupgrade")
+		}
+		_, _ = w.Write([]byte(`{"data":null}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "t@pve!x", "s", tenanttest.MobileSite(), false)
+	w := tenant.WorkloadSpec{Node: "hv02", VMID: 2040, Cores: 2, MemoryMB: 2048,
+		MAC: "02:00:00:00:00:01", Bridge: "tdemo0", Address: "10.20.129.10/24", Gateway: "10.20.129.1"}
+	if err := c.configureWorkload(context.Background(), w, false); err != nil {
+		t.Fatal(err)
+	}
+	if !set || got != "0" {
+		t.Fatalf("ciupgrade = %q (set=%v), want \"0\"", got, set)
+	}
+}

@@ -70,6 +70,11 @@ func (c *Client) configureWorkload(ctx context.Context, w tenant.WorkloadSpec, s
 		"net0":      fmt.Sprintf("virtio=%s,bridge=%s", w.MAC, w.Bridge),
 		"ipconfig0": fmt.Sprintf("ip=%s,gw=%s", w.Address, w.Gateway),
 		"tags":      strings.Join(w.Tags, ";"),
+		// Proxmox defaults ciupgrade on, which makes cloud-init run a full
+		// package upgrade on first boot: hundreds of packages, minutes long,
+		// and in CHG-0028 it took a workload's network down half way. The
+		// template is built up to date; later updates are the tenant's.
+		"ciupgrade": "0",
 	}
 	if w.Nameserver != "" {
 		cfg["nameserver"] = w.Nameserver
