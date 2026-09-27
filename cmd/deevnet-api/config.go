@@ -172,6 +172,7 @@ var openbaoEnv = []string{
 //	OPNSENSE_INSECURE_TLS  "true": the router's certificate is self-signed
 //	PROXMOX_INSECURE_TLS   "true": so is the node's
 //	MINIO_ADMIN_TLS        "false"
+//	MINIO_ADMIN_CACERT     the site CA, required when MINIO_ADMIN_TLS is true
 //
 //	DEEVNET_GRAFANA_ADMIN_USER     "admin"
 //	DEEVNET_BROKER_CONNECT_TIMEOUT "10s": reaching the messaging VM
@@ -354,7 +355,8 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		}
 	}
 
-	state, err := minio.New(getenv("MINIO_ADMIN_ENDPOINT"), creds["minio_admin_access_key"], creds["minio_admin_secret_key"], boolEnv(getenv, "MINIO_ADMIN_TLS", false))
+	state, err := minio.New(getenv("MINIO_ADMIN_ENDPOINT"), creds["minio_admin_access_key"], creds["minio_admin_secret_key"],
+		boolEnv(getenv, "MINIO_ADMIN_TLS", false), getenv("MINIO_ADMIN_CACERT"))
 	if err != nil {
 		return wiring{}, fmt.Errorf("MINIO_ADMIN_ENDPOINT: %w", err)
 	}

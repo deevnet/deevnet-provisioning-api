@@ -11,11 +11,16 @@ package minio
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 
 	"github.com/minio/madmin-go/v3"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 )
@@ -27,8 +32,33 @@ type Client struct {
 
 // New takes host:port, for example 10.20.25.20:9000, and the API's own admin
 // credential, never the root one.
-func New(endpoint, accessKey, secretKey string, useTLS bool) (*Client, error) {
-	a, err := madmin.New(endpoint, accessKey, secretKey, useTLS)
+//
+// With useTLS, caFile is the site CA the state store's certificate must verify
+// against (CHG-0030). It is required: this client never skips verification,
+// because what crosses this connection is the admin credential that creates
+// every tenant's state-store user.
+func New(endpoint, accessKey, secretKey string, useTLS bool, caFile string) (*Client, error) {
+	opts := &madmin.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure: useTLS,
+	}
+	if useTLS {
+		if caFile == "" {
+			return nil, errors.New("TLS needs a CA file; this client does not skip verification")
+		}
+		raw, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("state store CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(raw) {
+			return nil, fmt.Errorf("state store CA %s holds no certificate", caFile)
+		}
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		opts.Transport = tr
+	}
+	a, err := madmin.NewWithOptions(endpoint, opts)
 	if err != nil {
 		return nil, err
 	}
