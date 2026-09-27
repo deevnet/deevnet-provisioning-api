@@ -16,15 +16,16 @@ import (
 // Store is an in-memory tenant.Store.
 type Store struct {
 	// Unreadable: see Get.
-	Unreadable   bool
-	mu           sync.Mutex
-	records      map[string]tenant.Record
-	workloads    map[string]tenant.Workload
-	wifiKeys     map[string]tenant.WiFiKey
-	devices      map[string]tenant.Device
-	brokerAccts  map[string]tenant.BrokerAccount
-	extraRecords map[string]tenant.ExtraRecord
-	AuditLog     []tenant.AuditEntry
+	Unreadable    bool
+	mu            sync.Mutex
+	records       map[string]tenant.Record
+	workloads     map[string]tenant.Workload
+	wifiKeys      map[string]tenant.WiFiKey
+	admissionKeys map[string]tenant.AdmissionKey
+	devices       map[string]tenant.Device
+	brokerAccts   map[string]tenant.BrokerAccount
+	extraRecords  map[string]tenant.ExtraRecord
+	AuditLog      []tenant.AuditEntry
 }
 
 func NewStore() *Store { return &Store{records: map[string]tenant.Record{}} }
@@ -244,6 +245,34 @@ func (s *Store) PutWiFiKey(_ context.Context, k tenant.WiFiKey) (tenant.WiFiKey,
 	k.UpdatedAt = time.Now()
 	s.wifiKeys[key] = k
 	return k, nil
+}
+
+func (s *Store) PutAdmissionKey(_ context.Context, k tenant.AdmissionKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.admissionKeys == nil {
+		s.admissionKeys = map[string]tenant.AdmissionKey{}
+	}
+	k.CreatedAt = time.Now()
+	s.admissionKeys[k.Tenant] = k
+	return nil
+}
+
+func (s *Store) GetAdmissionKey(_ context.Context, name string) (tenant.AdmissionKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.admissionKeys[name]
+	if !ok {
+		return tenant.AdmissionKey{}, tenant.ErrNotFound
+	}
+	return k, nil
+}
+
+func (s *Store) DeleteAdmissionKey(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.admissionKeys, name)
+	return nil
 }
 
 func (s *Store) GetWiFiKey(_ context.Context, tenantName, name string) (tenant.WiFiKey, error) {
@@ -712,7 +741,9 @@ func MobileSite() tenant.Site {
 		TrustClasses: map[string]tenant.TrustClass{
 			"iot":        {Name: "iot", SSID: "DVNTM-IOT", VLAN: 30},
 			"iot_vendor": {Name: "iot_vendor", SSID: "DVNTM-IOTV", VLAN: 31},
+			"tenant_dev": {Name: "tenant_dev", SSID: "DVNTM-TD", VLAN: 45},
 		},
+		AdmissionClass: "tenant_dev",
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -148,6 +149,9 @@ type WiFiKey struct {
 	// authoritative copy (ADR-0012 §4); this one exists so the API can put the
 	// key back after a controller rebuild without a visit to every device.
 	PSK string
+	// MAC the key is bound to, aa:bb:cc:dd:ee:ff, or empty for none
+	// (ADR-0029 §3).
+	MAC string
 	// Unreadable: the stored PSK would not open, exactly as Secrets.Unreadable.
 	// The tenant is told to supply it again; the key itself is not lost,
 	// because the tenant has it.
@@ -262,6 +266,12 @@ type Store interface {
 	SetWiFiKeyStatus(ctx context.Context, tenantName, name string, status Status) error
 	DeleteWiFiKey(ctx context.Context, tenantName, name string) error
 
+	// Admission keys (ADR-0029 §1): the tenant developer key issued with an
+	// enrollment token, held here until the tenant it names exists.
+	PutAdmissionKey(ctx context.Context, k AdmissionKey) error
+	GetAdmissionKey(ctx context.Context, name string) (AdmissionKey, error)
+	DeleteAdmissionKey(ctx context.Context, name string) error
+
 	// Broker accounts (ADR-0012 §3). Nothing is allocated. The hash is stored
 	// before the writer is called, so a retry after an ambiguous failure sends
 	// the same one - see CreateBrokerAccount.
@@ -356,6 +366,10 @@ type WiFiKeySpec struct {
 	Name string
 	PSK  string
 	VLAN int
+	// MAC, when set, binds the key to one client (ADR-0029 §3): the controller
+	// admits the key from that MAC only. AA-BB-CC-00-11-22, as NormalizeMAC
+	// writes it. Empty binds nothing.
+	MAC string
 }
 
 // Wireless issues PPSK keys into the profiles inventory declares (ADR-0012 §6).
@@ -436,6 +450,12 @@ func NormalizeMAC(s string) (string, bool) {
 		out = append(out, hex[i], hex[i+1])
 	}
 	return string(out), true
+}
+
+// ControllerMAC writes a normalized MAC the way the wireless controller
+// documents it for a PPSK binding: AA-BB-CC-00-11-22.
+func ControllerMAC(normalized string) string {
+	return strings.ToUpper(strings.ReplaceAll(normalized, ":", "-"))
 }
 
 // VNetSpec is one VNet of a tenant network: the bridge name workloads attach

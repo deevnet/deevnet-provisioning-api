@@ -184,6 +184,30 @@ func TestEnsureKeyCorrectsADifferentOne(t *testing.T) {
 	}
 }
 
+// A key bound to a MAC (ADR-0029 §3) carries it to the controller in the form
+// the controller documents, and a changed binding is corrected like a changed
+// password.
+func TestEnsureKeyBindsAndRebindsItsMAC(t *testing.T) {
+	c := newController()
+	cl := newClient(t, c)
+	ctx := context.Background()
+	k := spec()
+	k.MAC = "AA-BB-CC-00-11-22"
+	if err := cl.EnsureKey(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.keys["eds-devices"].MAC; got != "AA-BB-CC-00-11-22" {
+		t.Fatalf("mac = %q", got)
+	}
+	k.MAC = "AA-BB-CC-00-11-33"
+	if err := cl.EnsureKey(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.keys["eds-devices"].MAC; got != "AA-BB-CC-00-11-33" {
+		t.Fatalf("rebound mac = %q", got)
+	}
+}
+
 // Removing twice converges. The profile keeps the placeholder rather than
 // emptying, because the controller will not accept an empty one by deletion -
 // see TestRemovingTheLastKeyLeavesAPlaceholder.

@@ -15,6 +15,7 @@ import (
 func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) {
 	h := &tenantHandlers{svc: svc, logger: logger}
 	mux.HandleFunc("POST /v1/admissions", operatorOnly(h.admit))
+	mux.HandleFunc("DELETE /v1/admissions/{name}", operatorOnly(h.revokeAdmission))
 	mux.HandleFunc("POST /v1/tenants", h.create)
 	mux.HandleFunc("GET /v1/tenants", operatorOnly(h.list))
 	mux.HandleFunc("GET /v1/tenants/{name}", h.ownTenant(h.get))
@@ -58,6 +59,8 @@ func (h *tenantHandlers) ownTenant(next http.HandlerFunc) http.HandlerFunc {
 
 type admitBody struct {
 	Name string `json:"name"`
+	// MAC, optional, binds the admission's Wi-Fi key to one laptop (ADR-0029 §3).
+	MAC string `json:"mac,omitempty"`
 }
 
 func (h *tenantHandlers) admit(w http.ResponseWriter, r *http.Request) {
@@ -65,19 +68,36 @@ func (h *tenantHandlers) admit(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be {\"name\": ...}"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be {\"name\": ...[, \"mac\": ...]}"})
 		return
 	}
-	adm, err := h.svc.Admit(r.Context(), body.Name)
+	adm, err := h.svc.Admit(r.Context(), body.Name, body.MAC)
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
+	out := map[string]any{
 		"name":             adm.Name,
 		"enrollment_token": adm.EnrollmentToken,
 		"expires_at":       adm.ExpiresAt.UTC(),
-	})
+	}
+	if adm.WiFi != nil {
+		wifi := map[string]any{"ssid": adm.WiFi.SSID, "psk": adm.WiFi.PSK}
+		if adm.WiFi.MAC != "" {
+			wifi["mac"] = adm.WiFi.MAC
+		}
+		out["wifi"] = wifi
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// revokeAdmission withdraws an unused admission's Wi-Fi key (ADR-0029 §1).
+func (h *tenantHandlers) revokeAdmission(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.RevokeAdmission(r.Context(), r.PathValue("name")); err != nil {
+		h.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type tenantHandlers struct {

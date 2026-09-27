@@ -25,6 +25,8 @@ type wifiKeyBody struct {
 	// holds, after the API lost its copy (ADR-0012 §5). Left empty, the API
 	// mints one, and re-applying keeps the key that is already there.
 	PSK string `json:"psk,omitempty"`
+	// MAC binds the key to one client (ADR-0029 §3). Optional.
+	MAC string `json:"mac,omitempty"`
 }
 
 type wifiKeyView struct {
@@ -35,6 +37,7 @@ type wifiKeyView struct {
 	// SSID: the same trust class is DVNTM-IOT at one site and DVNT-IOT at another.
 	SSID   string `json:"ssid"`
 	VLAN   int    `json:"vlan"`
+	MAC    string `json:"mac,omitempty"`
 	Status string `json:"status"`
 	// PSK appears on the create response only, never on a read. The holder
 	// already has it in its own state; what a read needs to say is whether the
@@ -55,6 +58,7 @@ func wifiKeyViewOf(k tenant.IssuedWiFiKey, issued bool) wifiKeyView {
 		TrustClass:    k.TrustClass,
 		SSID:          k.SSID,
 		VLAN:          k.VLAN,
+		MAC:           k.MAC,
 		Status:        string(k.Status),
 		SecretsStored: !k.Unreadable,
 		CreatedAt:     k.CreatedAt,

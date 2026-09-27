@@ -14,12 +14,12 @@ import (
 // Unlike workloads these allocate nothing, so none of this takes the allocation
 // lock: a key's identity is the name the tenant chose.
 
-const wifiKeyColumns = `tenant, name, trust_class, psk, status, created_at, updated_at`
+const wifiKeyColumns = `tenant, name, trust_class, psk, mac, status, created_at, updated_at`
 
 func scanWiFiKey(row pgx.Row) (tenant.WiFiKey, error) {
 	var k tenant.WiFiKey
 	var status string
-	err := row.Scan(&k.Tenant, &k.Name, &k.TrustClass, &k.PSK, &status, &k.CreatedAt, &k.UpdatedAt)
+	err := row.Scan(&k.Tenant, &k.Name, &k.TrustClass, &k.PSK, &k.MAC, &status, &k.CreatedAt, &k.UpdatedAt)
 	k.Status = tenant.Status(status)
 	return k, err
 }
@@ -48,12 +48,12 @@ func (p *Postgres) PutWiFiKey(ctx context.Context, k tenant.WiFiKey) (tenant.WiF
 		}
 		var err error
 		out, err = scanWiFiKey(tx.QueryRow(ctx,
-			`INSERT INTO tenant_wifi_keys (tenant, name, trust_class, psk, status)
-			      VALUES ($1, $2, $3, $4, $5)
+			`INSERT INTO tenant_wifi_keys (tenant, name, trust_class, psk, mac, status)
+			      VALUES ($1, $2, $3, $4, $5, $6)
 			 ON CONFLICT (tenant, name) DO UPDATE
-			         SET psk = EXCLUDED.psk, status = EXCLUDED.status, updated_at = now()
+			         SET psk = EXCLUDED.psk, mac = EXCLUDED.mac, status = EXCLUDED.status, updated_at = now()
 			   RETURNING `+wifiKeyColumns,
-			k.Tenant, k.Name, k.TrustClass, psk, string(k.Status)))
+			k.Tenant, k.Name, k.TrustClass, psk, k.MAC, string(k.Status)))
 		return err
 	})
 	if err != nil {
@@ -130,4 +130,42 @@ func (p *Postgres) openWiFiKey(ctx context.Context, k tenant.WiFiKey) tenant.WiF
 	}
 	k.PSK, k.Unreadable = p.openOne(ctx, k.PSK, "wifi-key")
 	return k
+}
+
+// PutAdmissionKey stores the key issued with an admission, replacing an
+// earlier one for the same name (ADR-0029 §1).
+func (p *Postgres) PutAdmissionKey(ctx context.Context, k tenant.AdmissionKey) error {
+	psk, err := p.sealOne(ctx, k.PSK)
+	if err != nil {
+		return err
+	}
+	_, err = p.pool.Exec(ctx,
+		`INSERT INTO admission_keys (tenant, psk, mac) VALUES ($1, $2, $3)
+		 ON CONFLICT (tenant) DO UPDATE SET psk = EXCLUDED.psk, mac = EXCLUDED.mac, created_at = now()`,
+		k.Tenant, psk, k.MAC)
+	return err
+}
+
+// GetAdmissionKey returns the key an admission issued for name.
+func (p *Postgres) GetAdmissionKey(ctx context.Context, name string) (tenant.AdmissionKey, error) {
+	var k tenant.AdmissionKey
+	err := p.pool.QueryRow(ctx,
+		`SELECT tenant, psk, mac, created_at FROM admission_keys WHERE tenant = $1`, name).
+		Scan(&k.Tenant, &k.PSK, &k.MAC, &k.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return tenant.AdmissionKey{}, tenant.ErrNotFound
+	}
+	if err != nil {
+		return tenant.AdmissionKey{}, err
+	}
+	if p.sealer != nil {
+		k.PSK, k.Unreadable = p.openOne(ctx, k.PSK, "admission-key")
+	}
+	return k, nil
+}
+
+// DeleteAdmissionKey removes it. One that is not there is not an error.
+func (p *Postgres) DeleteAdmissionKey(ctx context.Context, name string) error {
+	_, err := p.pool.Exec(ctx, `DELETE FROM admission_keys WHERE tenant = $1`, name)
+	return err
 }
