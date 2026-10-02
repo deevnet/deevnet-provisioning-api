@@ -386,7 +386,7 @@ func kitEnv(st state, h string, app appCreds) string {
 DEEVNET_TENANT=%s
 MQTT_HOST=%s
 MQTT_PORT=%d
-MQTT_CA_FILE=site-ca.pem
+MQTT_CA_FILE=deevnet-kit-ca.pem
 LOG_ENDPOINT=https://%s:%d
 LOG_INGEST_TOKEN=%s
 LOG_READ_TOKEN=%s
@@ -420,7 +420,7 @@ func (k *kit) cmdExport(args []string) error {
 	if err != nil {
 		return err
 	}
-	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, "site-ca.pem")
+	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, kitCAExportName)
 	if err := writeFile(envPath, []byte(kitEnv(st, host(), creds)), 0o600); err != nil {
 		return err
 	}

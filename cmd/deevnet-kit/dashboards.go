@@ -69,7 +69,7 @@ func dashboardEnv(st state, h string) string {
 GRAFANA_AUTH=%s:%s
 GRAFANA_ORG_ID=%d
 TF_VAR_grafana_org_id=%d
-GRAFANA_CA_CERT=site-ca.pem
+GRAFANA_CA_CERT=deevnet-kit-ca.pem
 `, dashboardURL(h), st.Tenant, st.DashboardPassword, st.DashboardOrg, st.DashboardOrg)
 }
 

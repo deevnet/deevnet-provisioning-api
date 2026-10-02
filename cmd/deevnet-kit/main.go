@@ -40,7 +40,7 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
   deevnet-kit env [--app NAME --password-file FILE]
                                        print the app's environment (kit.env)
   deevnet-kit export DIR [--app NAME --password-file FILE]
-                                       write kit.env and site-ca.pem into DIR; with
+                                       write kit.env and deevnet-kit-ca.pem into DIR; with
                                        --app, kit.env carries that account's login
   deevnet-kit account add NAME [--device DEV] [--publish P]... [--subscribe S]...
                                        [--password-file FILE | --password PW]

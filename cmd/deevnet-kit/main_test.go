@@ -305,7 +305,7 @@ func TestInitWritesGrafanaSecretsAndKitEnvWaitsForTheOrg(t *testing.T) {
 		"GRAFANA_AUTH=bench1:" + st.DashboardPassword + "\n",
 		"GRAFANA_ORG_ID=2\n",
 		"TF_VAR_grafana_org_id=2\n",
-		"GRAFANA_CA_CERT=site-ca.pem\n",
+		"GRAFANA_CA_CERT=deevnet-kit-ca.pem\n",
 	} {
 		if !strings.Contains(env, want) {
 			t.Errorf("kit.env lacks %q", want)
