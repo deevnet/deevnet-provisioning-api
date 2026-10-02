@@ -18,8 +18,12 @@ import (
 )
 
 // The card's own CA. It signs this Pi's server certificate and nothing else;
-// an app trusts it the way it trusted site-ca.pem on Deevnet.
+// an app trusts it the way it trusts the site root on Deevnet: through the CA
+// file kit.env names (ADR-0030 §4), so the app itself does not change.
 const (
+	// The name export gives the CA, and the name kit.env points the app at.
+	kitCAExportName = "deevnet-kit-ca.pem"
+
 	caValidity = 10 * 365 * 24 * time.Hour
 	// 825 days is the longest server certificate Apple platforms accept, and
 	// a Mac is the laptop most likely to be pointed at this Pi.
