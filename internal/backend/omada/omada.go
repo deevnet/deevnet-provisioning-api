@@ -88,8 +88,9 @@ type Client struct {
 }
 
 // New takes the controller root, for example https://10.20.99.40:8043.
-// insecureTLS accepts the controller's own certificate, as the Ansible play
-// does (validate_certs: false), until it is issued one from the site CA.
+// insecureTLS skips verifying the controller's certificate: only for a
+// controller still serving its own. With it off the client trusts the system
+// pool, which SSL_CERT_FILE points at the site root (ADR-0030 §8).
 func New(apiURL, clientID, clientSecret string, insecureTLS bool) *Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	if insecureTLS {

@@ -30,8 +30,9 @@ type Client struct {
 }
 
 // New takes the API root, for example https://10.20.25.1/api. insecureTLS
-// accepts the router's self-signed certificate, as the Ansible roles do
-// (opnsense_validate_certs: false) until the internal CA exists.
+// skips verifying the router's certificate: only for a router still serving
+// its own self-signed one. With it off the client trusts the system pool,
+// which SSL_CERT_FILE points at the site root (ADR-0030 §8).
 func New(apiURL, key, secret string, insecureTLS bool) *Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	if insecureTLS {

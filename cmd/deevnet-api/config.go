@@ -169,8 +169,8 @@ var openbaoEnv = []string{
 //	OPENBAO_KV_PATH        "backends"
 //	OPENBAO_TRANSIT_KEY    "tenant-secrets"
 //	DEEVNET_ENROLLMENT_TTL "72h"
-//	OPNSENSE_INSECURE_TLS  "true": the router's certificate is self-signed
-//	PROXMOX_INSECURE_TLS   "true": so is the node's
+//	OPNSENSE_INSECURE_TLS  "false": the router serves a site certificate (ADR-0030)
+//	PROXMOX_INSECURE_TLS   "false": so does the node
 //	MINIO_ADMIN_TLS        "false"
 //	MINIO_ADMIN_CACERT     the site CA, required when MINIO_ADMIN_TLS is true
 //
@@ -363,12 +363,12 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 
 	// One Proxmox client reads the fabric and builds tenant networks and
 	// workloads (ADR-0015 §11, §12).
-	pve := proxmox.New(getenv("PROXMOX_API_URL"), creds["proxmox_token_id"], creds["proxmox_token_secret"], site, boolEnv(getenv, "PROXMOX_INSECURE_TLS", true))
+	pve := proxmox.New(getenv("PROXMOX_API_URL"), creds["proxmox_token_id"], creds["proxmox_token_secret"], site, boolEnv(getenv, "PROXMOX_INSECURE_TLS", false))
 
 	svc := &tenant.Service{
 		Site:          site,
 		DNS:           powerdns.New(getenv("POWERDNS_API_URL"), creds["powerdns_api_key"]),
-		Resolver:      opnsense.New(getenv("OPNSENSE_API_URL"), creds["opnsense_api_key"], creds["opnsense_api_secret"], boolEnv(getenv, "OPNSENSE_INSECURE_TLS", true)),
+		Resolver:      opnsense.New(getenv("OPNSENSE_API_URL"), creds["opnsense_api_key"], creds["opnsense_api_secret"], boolEnv(getenv, "OPNSENSE_INSECURE_TLS", false)),
 		State:         state,
 		Fabric:        pve,
 		Network:       pve,
@@ -386,7 +386,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	if getenv("OMADA_API_URL") != "" {
 		svc.Wireless = omada.New(getenv("OMADA_API_URL"),
 			creds["omada_client_id"], creds["omada_client_secret"],
-			boolEnv(getenv, "OMADA_INSECURE_TLS", true))
+			boolEnv(getenv, "OMADA_INSECURE_TLS", false))
 	}
 	// Same reasoning again: a site with no broker leaves BrokerWriter nil and
 	// the broker-account endpoints refuse with a reason.
