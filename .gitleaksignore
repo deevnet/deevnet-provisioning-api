@@ -1,0 +1,7 @@
+# Reviewed secret-scan findings (CHG-0035). One fingerprint per line:
+# commit:file:rule:line. Never a value.
+#
+# Fixture values in unit tests, not credentials.
+23669e9219ae307215fde19089e1ae17f0f69eae:internal/server/tenants_test.go:generic-api-key:144
+247dba08d9c2c68629345e2218ec6fc70f435d24:internal/backend/minio/minio_test.go:generic-api-key:65
+247dba08d9c2c68629345e2218ec6fc70f435d24:internal/server/tenants_test.go:generic-api-key:135
