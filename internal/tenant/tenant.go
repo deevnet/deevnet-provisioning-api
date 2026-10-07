@@ -30,6 +30,7 @@ const (
 	StepNetwork   = "network"
 	StepWiFiKey   = "wifi-key"
 	StepBroker    = "broker-account"
+	StepAddress   = "device-address"
 	StepLogStore  = "log-store"
 	StepDashboard = "dashboards"
 )
@@ -163,8 +164,9 @@ type WiFiKey struct {
 
 // Device is one of a tenant's edge devices as the registry holds it
 // (ADR-0012 §3). The entry is the device's identity: an application-owned
-// device takes no substrate host record, leases from its trust class's pool and
-// is named in its owner's own zone (ADR-0011 open question 3).
+// device takes no substrate host record and is named in its owner's own zone
+// (ADR-0011 open question 3). It leases from its trust class's pool unless its
+// tenant asks for a fixed address - see DeviceAddress.
 //
 // A row here is identity, never authorization. What a device is allowed to
 // consume is carried by a credential it proves (ADR-0020 §2), and that
@@ -173,10 +175,34 @@ type Device struct {
 	Tenant     string
 	Name       string
 	TrustClass string
-	// MAC is optional, and is a label for the owner's own inventory. Nothing
-	// the substrate does may turn on it: a MAC is trivially spoofed on a shared
-	// segment, so binding to one stops nobody who is trying (ADR-0012 §3) and
-	// it is explicitly not an authorization input (ADR-0020 §2).
+	// MAC is optional. It is never an authorization input: a MAC is trivially
+	// spoofed on a shared segment, so binding to one stops nobody who is trying
+	// (ADR-0012 §3, ADR-0020 §2). The one thing the substrate does with it is
+	// addressing: a fixed address is reserved for it when the tenant asks
+	// (ADR-0035), which says where a device is found and nothing about who it is.
+	MAC       string
+	Status    Status
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// DeviceAddress is a fixed address on a trust class's network, reserved for one
+// of a tenant's registered devices (ADR-0035).
+//
+// The network is the substrate's and shared by every tenant, so the address is
+// allocated, not derived: the lowest free one in the range the site sets aside
+// for tenants, unless the tenant names one. The tenant's own state remembers
+// it and asks for the same one again on a restore.
+//
+// It is addressing, never authorization (ADR-0020 §2). The reservation follows
+// the device's MAC, which anyone on the segment can copy.
+type DeviceAddress struct {
+	Tenant     string
+	Device     string
+	TrustClass string
+	Address    string
+	// MAC is the device's, read from its registry entry rather than stored a
+	// second time: swapping the hardware behind a name moves the reservation.
 	MAC       string
 	Status    Status
 	CreatedAt time.Time
@@ -288,6 +314,19 @@ type Store interface {
 	ListDevices(ctx context.Context, tenantName string) ([]Device, error)
 	DeleteDevice(ctx context.Context, tenantName, name string) error
 
+	// Device addresses (ADR-0035). CreateDeviceAddress holds the allocation
+	// lock while it calls pick with every address already held in that trust
+	// class, across all tenants and with each holder's MAC, and stores the
+	// address pick returns - so two tenants can never be given the same one. A
+	// device that already holds an address keeps it and pick is not called.
+	CreateDeviceAddress(ctx context.Context, a DeviceAddress, pick func(held []DeviceAddress) (string, error)) (DeviceAddress, error)
+	GetDeviceAddress(ctx context.Context, tenantName, device string) (DeviceAddress, error)
+	ListDeviceAddresses(ctx context.Context, tenantName string) ([]DeviceAddress, error)
+	// ListClassAddresses is every tenant's addresses in one trust class.
+	ListClassAddresses(ctx context.Context, trustClass string) ([]DeviceAddress, error)
+	SetDeviceAddressStatus(ctx context.Context, tenantName, device string, status Status) error
+	DeleteDeviceAddress(ctx context.Context, tenantName, device string) error
+
 	// Extra records (ADR-0015 §13).
 	PutRecord(ctx context.Context, r ExtraRecord) error
 	ListRecords(ctx context.Context, tenantName string) ([]ExtraRecord, error)
@@ -381,6 +420,37 @@ type Wireless interface {
 	EnsureKey(ctx context.Context, k WiFiKeySpec) error
 	// RemoveKey deletes it. A key that is not there is not an error.
 	RemoveKey(ctx context.Context, ssid, name string) error
+}
+
+// Reservation is one fixed address as the DHCP server needs it (ADR-0035).
+type Reservation struct {
+	// Subnet is the network the address is on, as a CIDR. The server's own
+	// subnet object is resolved from it.
+	Subnet  string
+	Address string
+	// MAC in lowercase colon form, as NormalizeMAC writes it.
+	MAC      string
+	Hostname string
+	// Description is how the API knows a reservation is its own, and which one:
+	// "Deevnet API - <tenant>/<device>". Inventory's reservations carry another,
+	// and neither writer touches the other's.
+	Description string
+}
+
+// Reservations is the DHCP server on the substrate's device networks.
+//
+// Nil is legal, like Wireless: a site that sets no address range aside for
+// tenants reserves none, and the routes refuse with a reason.
+type Reservations interface {
+	// EnsureReservation makes the reservation with this description exist with
+	// this MAC, address and hostname, correcting one that is already there. It
+	// returns an error wrapping ErrAddressConflict when another reservation on
+	// that subnet - inventory's, or one made by hand - already holds the MAC or
+	// the address.
+	EnsureReservation(ctx context.Context, r Reservation) error
+	// RemoveReservation deletes the one with this description. One that is not
+	// there is not an error.
+	RemoveReservation(ctx context.Context, description string) error
 }
 
 // BrokerWriter puts an account into the broker's auth database.
@@ -557,6 +627,14 @@ var (
 	ErrHasWorkloads = errors.New("the tenant still has workloads")
 	// ErrWorkloadsExhausted: the tenant's workload ordinals are all taken.
 	ErrWorkloadsExhausted = errors.New("no free workload ordinal")
+	// ErrAddressConflict: the MAC already holds an address on that network, or
+	// the address asked for is taken. Which, and by whom, is not said: the
+	// network is shared, and the answer would tell one tenant what another holds.
+	ErrAddressConflict = errors.New("that MAC or address is already reserved on this network")
+	// ErrAddressesExhausted: the range set aside for tenants is full.
+	ErrAddressesExhausted = errors.New("no free address on this network")
+	// ErrAddressQuota: the tenant holds as many addresses as one tenant may.
+	ErrAddressQuota = errors.New("the tenant holds its full share of addresses on this network")
 )
 
 // InvalidError is a request the API refuses to act on.

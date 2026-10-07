@@ -10,7 +10,7 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 being up.
 
 It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry,
-their MQTT broker accounts, their log store tokens and their Grafana organisation (`docs/api-v1.md`).
+their devices' fixed addresses, their MQTT broker accounts, their log store tokens and their Grafana organisation (`docs/api-v1.md`).
 
 The repository name says what the service is for; the service itself, its binary, image and
 container keep the short name `deevnet-api`, which is what the `deevnet.mgmt` `deevnet_api` role
@@ -68,6 +68,13 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   `make test-integration`): `users.auto_assign_org` must stay ON or `OrgId` on user create is ignored
   and a personal organisation named for the login is made; `DELETE /api/orgs/<id>` answers 500
   (grafana/grafana#127386), so Remove renames the emptied organisation instead.
+- **The router's DHCP reservations have two writers.** Inventory's rows start "Ansible managed", the
+  API's "Deevnet API - ", and each leaves the other's alone. The Kea client finds its own row by its
+  exact description and refuses a MAC or address any other row on the subnet holds. Don't key it by
+  MAC: that is how one writer overwrites the other.
+- **A device address is allocated, not derived**, unlike a workload's: the device network is one
+  subnet shared by every tenant. The tenant's state remembers it and re-requests it on a restore, and
+  a clash never says who holds what.
 - **`/healthz` must not touch the database.** It is liveness. Readiness is `/readyz`.
 - **Two writers, two hosts, two keys.** Broker accounts go to the messaging VM as a bcrypt hash;
   log tokens go to the observability store as the token itself, because vmauth compares what it was

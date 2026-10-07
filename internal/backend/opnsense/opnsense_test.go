@@ -24,9 +24,15 @@ type fakeRouter struct {
 	next         int
 	reconfigures int
 	calls        []string
+
+	// Kea, in kea_test.go.
+	reservations    map[string]reservationRow // by uuid
+	keaReconfigures int
 }
 
-func newFakeRouter() *fakeRouter { return &fakeRouter{rows: map[string]forwardRow{}} }
+func newFakeRouter() *fakeRouter {
+	return &fakeRouter{rows: map[string]forwardRow{}, reservations: map[string]reservationRow{}}
+}
 
 func (f *fakeRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
@@ -74,6 +80,8 @@ func (f *fakeRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/unbound/service/reconfigure":
 		f.reconfigures++
 		reply(map[string]string{"status": "ok"})
+	case strings.HasPrefix(path, "/kea/"):
+		f.serveKea(w, path, body)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

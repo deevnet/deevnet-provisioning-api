@@ -35,6 +35,7 @@ The IoT resources of ADR-0012 arrive later; their routes still answer `501`. The
 | `POST /v1/tenants/{name}/workloads` | operator or the tenant | build a VM in the tenant's network |
 | `GET`, `DELETE` `/v1/tenants/{name}/workloads[/{workload}]` | operator or the tenant | list, read, remove |
 | `PUT`, `GET`, `DELETE` `/v1/tenants/{name}/records[/{record}]` | operator or the tenant | names beside the workloads' own |
+| `POST`, `GET`, `DELETE` `/v1/tenants/{name}/devices/{device}/address` | operator or the tenant | a fixed address for a registered device |
 | `GET /v1/fabric/egress` | operator or the egress agent | the VRFs the exit node routes |
 | any other `/v1/*` | operator or a tenant | `401` without a valid token; `501` with one |
 
@@ -96,7 +97,7 @@ KV v2 secret.
 | `OPENBAO_TRANSIT_KEY` | `tenant-secrets` | the key that seals stored secrets |
 | `DEEVNET_ENROLLMENT_TTL` | `72h` | how long an enrollment token lives |
 | `DEEVNET_API_TLS_CERT`, `DEEVNET_API_TLS_KEY` | | serve TLS; set both or neither |
-| `OPNSENSE_INSECURE_TLS`, `PROXMOX_INSECURE_TLS` | `true` | self-signed certificates on those devices |
+| `OPNSENSE_INSECURE_TLS`, `PROXMOX_INSECURE_TLS` | `false` | `true` only for a device still serving a self-signed certificate |
 | `MINIO_ADMIN_TLS` | `false` | `true` when the state store serves TLS (CHG-0030) |
 | `MINIO_ADMIN_CACERT` | | the site CA the state store must verify against; required with `MINIO_ADMIN_TLS` |
 
@@ -111,6 +112,16 @@ had the values.
 | `OMADA_API_URL` | | e.g. `https://10.20.99.40:8043`; turns Wi-Fi keys on |
 | `DEEVNET_IOT_TRUST_CLASSES` | | `iot=DVNTM-IOT:30`, comma-separated `name=ssid:vlan` |
 | `OMADA_INSECURE_TLS` | `true` | the controller's self-signed certificate |
+
+Fixed device addresses (ADR-0035) are optional in the same way. They need no credential of their own:
+the reservations go to the router the resolver forwards already go to.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DEEVNET_IOT_ADDRESS_RANGES` | | `iot=10.20.30.0/24:10.20.30.25-10.20.30.200`, comma-separated `name=subnet:first-last`; turns device addresses on. Each name must be a served trust class |
+| `DEEVNET_IOT_ADDRESSES_PER_TENANT` | `16` | one tenant's share of a range |
+
+Both are projected from inventory like the trust classes.
 
 `DEEVNET_IOT_TRUST_CLASSES` is **projected from inventory**, not decided here: `deevnet_vlans` in
 `ansible-inventory-deevnet` remains the only declaration of a segment's SSID and VLAN (ADR-0009),

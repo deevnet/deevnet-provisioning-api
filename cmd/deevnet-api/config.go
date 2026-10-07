@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -174,6 +175,12 @@ var openbaoEnv = []string{
 //	MINIO_ADMIN_TLS        "false"
 //	MINIO_ADMIN_CACERT     the site CA, required when MINIO_ADMIN_TLS is true
 //
+//	DEEVNET_IOT_ADDRESS_RANGES       unset: the site reserves no device
+//	                                 addresses (ADR-0035). Set, it is the part
+//	                                 of each trust class's network tenants are
+//	                                 given: iot=10.20.30.0/24:10.20.30.25-10.20.30.200
+//	DEEVNET_IOT_ADDRESSES_PER_TENANT "16": one tenant's share of such a range
+//
 //	DEEVNET_GRAFANA_ADMIN_USER     "admin"
 //	DEEVNET_BROKER_CONNECT_TIMEOUT "10s": reaching the messaging VM
 //	DEEVNET_BROKER_SESSION_TIMEOUT "30s": the whole exchange once connected.
@@ -305,6 +312,21 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			}
 		}
 	}
+	// Fixed device addresses (ADR-0035). No gate of its own and no credential:
+	// the reservations go to the router the resolver forwards already go to.
+	// Site.Validate refuses a range for a class the site does not serve, so
+	// this cannot be set at a site with no wireless controller by accident.
+	if raw := getenv("DEEVNET_IOT_ADDRESS_RANGES"); raw != "" {
+		var err error
+		if site.AddressRanges, err = parseAddressRanges(raw); err != nil {
+			return wiring{}, fmt.Errorf("DEEVNET_IOT_ADDRESS_RANGES: %w", err)
+		}
+		if v := getenv("DEEVNET_IOT_ADDRESSES_PER_TENANT"); v != "" {
+			if site.AddressesPerTenant, err = strconv.Atoi(v); err != nil || site.AddressesPerTenant < 1 {
+				return wiring{}, fmt.Errorf("DEEVNET_IOT_ADDRESSES_PER_TENANT must be a positive number, not %q", v)
+			}
+		}
+	}
 	if getenv("DEEVNET_BROKER_WRITER_ADDR") != "" {
 		if missing := empty(getenv, brokerEnv); len(missing) > 0 {
 			return wiring{}, fmt.Errorf("DEEVNET_BROKER_WRITER_ADDR is set, but these are empty: %s", strings.Join(missing, ", "))
@@ -365,10 +387,14 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	// workloads (ADR-0015 §11, §12).
 	pve := proxmox.New(getenv("PROXMOX_API_URL"), creds["proxmox_token_id"], creds["proxmox_token_secret"], site, boolEnv(getenv, "PROXMOX_INSECURE_TLS", false))
 
+	// One router client forwards tenant zones and, where the site sets a range
+	// aside, holds tenants' device address reservations (ADR-0035).
+	router := opnsense.New(getenv("OPNSENSE_API_URL"), creds["opnsense_api_key"], creds["opnsense_api_secret"], boolEnv(getenv, "OPNSENSE_INSECURE_TLS", false))
+
 	svc := &tenant.Service{
 		Site:          site,
 		DNS:           powerdns.New(getenv("POWERDNS_API_URL"), creds["powerdns_api_key"]),
-		Resolver:      opnsense.New(getenv("OPNSENSE_API_URL"), creds["opnsense_api_key"], creds["opnsense_api_secret"], boolEnv(getenv, "OPNSENSE_INSECURE_TLS", false)),
+		Resolver:      router,
 		State:         state,
 		Fabric:        pve,
 		Network:       pve,
@@ -380,6 +406,10 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	// compare equal to nil.
 	if enroller != nil {
 		svc.Enroller = enroller
+	}
+	// Left nil without a range, so the address routes refuse with a reason.
+	if len(site.AddressRanges) > 0 {
+		svc.Reservations = router
 	}
 	// Same reasoning: leave Wireless nil at a site with no controller, so the
 	// Wi-Fi endpoints refuse with a reason rather than dereferencing nothing.
@@ -497,6 +527,57 @@ func parseTrustClasses(raw string) (map[string]tenant.TrustClass, error) {
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no trust classes declared")
+	}
+	return out, nil
+}
+
+// parseAddressRanges reads "iot=10.20.30.0/24:10.20.30.25-10.20.30.200".
+//
+// Inventory's deevnet_vlans decides these too, and the deployment role projects
+// them. A malformed entry is a startup failure naming it: a range read wrongly
+// would hand tenants addresses in the dynamic pool or among the substrate's
+// own hosts.
+func parseAddressRanges(raw string) (map[string]tenant.AddressRange, error) {
+	out := map[string]tenant.AddressRange{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		const shape = "name=subnet:first-last"
+		name, rest, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("%q is not %s", entry, shape)
+		}
+		cidr, span, ok := strings.Cut(rest, ":")
+		if !ok {
+			return nil, fmt.Errorf("%q is not %s", entry, shape)
+		}
+		first, last, ok := strings.Cut(span, "-")
+		if !ok {
+			return nil, fmt.Errorf("%q is not %s", entry, shape)
+		}
+		var (
+			r   tenant.AddressRange
+			err error
+		)
+		if r.Subnet, err = netip.ParsePrefix(strings.TrimSpace(cidr)); err != nil {
+			return nil, fmt.Errorf("%q: subnet: %w", entry, err)
+		}
+		if r.First, err = netip.ParseAddr(strings.TrimSpace(first)); err != nil {
+			return nil, fmt.Errorf("%q: first address: %w", entry, err)
+		}
+		if r.Last, err = netip.ParseAddr(strings.TrimSpace(last)); err != nil {
+			return nil, fmt.Errorf("%q: last address: %w", entry, err)
+		}
+		name = strings.TrimSpace(name)
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("address range %q is declared twice", name)
+		}
+		out[name] = r
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no address ranges declared")
 	}
 	return out, nil
 }
