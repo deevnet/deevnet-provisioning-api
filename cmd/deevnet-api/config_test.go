@@ -395,3 +395,69 @@ func TestGrafanaHalfConfigured(t *testing.T) {
 		})
 	}
 }
+
+// Every site deployed before CHG-0044 sets no range. That must stay a site
+// that starts, with address routes that refuse, or the image bump would take
+// the API down before the role had the value.
+func TestNoAddressRangeStillStartsAndReservesNothing(t *testing.T) {
+	w, err := tenantService(context.Background(), env(fullEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Reservations != nil {
+		t.Error("no DEEVNET_IOT_ADDRESS_RANGES should mean no reservations backend")
+	}
+}
+
+func addressEnv() map[string]string {
+	e := fullEnv()
+	e["OMADA_API_URL"] = "https://10.20.99.40:8043"
+	e["DEEVNET_IOT_TRUST_CLASSES"] = "iot=DVNTM-IOT:30"
+	e["OMADA_CLIENT_ID"] = "id"
+	e["OMADA_CLIENT_SECRET"] = "secret"
+	e["DEEVNET_IOT_ADDRESS_RANGES"] = "iot=10.20.30.0/24:10.20.30.25-10.20.30.200"
+	return e
+}
+
+func TestAddressRangeWiresTheRouter(t *testing.T) {
+	e := addressEnv()
+	e["DEEVNET_IOT_ADDRESSES_PER_TENANT"] = "4"
+	w, err := tenantService(context.Background(), env(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Reservations == nil {
+		t.Fatal("reservations backend not wired")
+	}
+	r := w.tenants.Site.AddressRanges["iot"]
+	if r.Subnet.String() != "10.20.30.0/24" || r.First.String() != "10.20.30.25" || r.Last.String() != "10.20.30.200" {
+		t.Errorf("range = %+v", r)
+	}
+	if w.tenants.Site.AddressQuota() != 4 {
+		t.Errorf("quota = %d, want 4", w.tenants.Site.AddressQuota())
+	}
+}
+
+// A range read wrongly would hand out the dynamic pool or the substrate's own
+// hosts, so anything doubtful is a startup failure that names the variable.
+func TestAddressRangeMisconfigured(t *testing.T) {
+	for name, tc := range map[string]struct{ key, value, want string }{
+		"not a range":           {"DEEVNET_IOT_ADDRESS_RANGES", "iot=10.20.30.0/24", "DEEVNET_IOT_ADDRESS_RANGES"},
+		"bad address":           {"DEEVNET_IOT_ADDRESS_RANGES", "iot=10.20.30.0/24:10.20.30.25-banana", "last address"},
+		"outside its subnet":    {"DEEVNET_IOT_ADDRESS_RANGES", "iot=10.20.30.0/24:10.20.31.25-10.20.31.200", "outside its subnet"},
+		"backwards":             {"DEEVNET_IOT_ADDRESS_RANGES", "iot=10.20.30.0/24:10.20.30.200-10.20.30.25", "ends before it starts"},
+		"a class nobody serves": {"DEEVNET_IOT_ADDRESS_RANGES", "lab=10.20.30.0/24:10.20.30.25-10.20.30.200", "not a served trust class"},
+		"declared twice":        {"DEEVNET_IOT_ADDRESS_RANGES", "iot=10.20.30.0/24:10.20.30.25-10.20.30.99,iot=10.20.30.0/24:10.20.30.100-10.20.30.200", "declared twice"},
+		"quota is not a number": {"DEEVNET_IOT_ADDRESSES_PER_TENANT", "lots", "DEEVNET_IOT_ADDRESSES_PER_TENANT"},
+		"quota of zero":         {"DEEVNET_IOT_ADDRESSES_PER_TENANT", "0", "DEEVNET_IOT_ADDRESSES_PER_TENANT"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := addressEnv()
+			e[tc.key] = tc.value
+			_, err := tenantService(context.Background(), env(e))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to say %q", err, tc.want)
+			}
+		})
+	}
+}

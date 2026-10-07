@@ -6,6 +6,8 @@ package tenanttest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -23,6 +25,7 @@ type Store struct {
 	wifiKeys      map[string]tenant.WiFiKey
 	admissionKeys map[string]tenant.AdmissionKey
 	devices       map[string]tenant.Device
+	addresses     map[string]tenant.DeviceAddress
 	brokerAccts   map[string]tenant.BrokerAccount
 	extraRecords  map[string]tenant.ExtraRecord
 	AuditLog      []tenant.AuditEntry
@@ -378,6 +381,93 @@ func (s *Store) DeleteDevice(_ context.Context, tenantName, name string) error {
 	return nil
 }
 
+// withMAC fills in the device's MAC, which the real store reads through a join.
+func (s *Store) withMAC(a tenant.DeviceAddress) tenant.DeviceAddress {
+	a.MAC = s.devices[a.Tenant+"/"+a.Device].MAC
+	return a
+}
+
+func (s *Store) CreateDeviceAddress(_ context.Context, a tenant.DeviceAddress, pick func([]tenant.DeviceAddress) (string, error)) (tenant.DeviceAddress, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.addresses == nil {
+		s.addresses = map[string]tenant.DeviceAddress{}
+	}
+	key := a.Tenant + "/" + a.Device
+	if old, ok := s.addresses[key]; ok {
+		old.Status, old.UpdatedAt = a.Status, time.Now()
+		s.addresses[key] = old
+		return s.withMAC(old), nil
+	}
+	if _, ok := s.devices[key]; !ok {
+		return tenant.DeviceAddress{}, tenant.ErrNotFound
+	}
+	var held []tenant.DeviceAddress
+	for _, h := range s.addresses {
+		if h.TrustClass == a.TrustClass {
+			held = append(held, s.withMAC(h))
+		}
+	}
+	address, err := pick(held)
+	if err != nil {
+		return tenant.DeviceAddress{}, err
+	}
+	a.Address, a.CreatedAt, a.UpdatedAt = address, time.Now(), time.Now()
+	a.MAC = ""
+	s.addresses[key] = a
+	return s.withMAC(a), nil
+}
+
+func (s *Store) GetDeviceAddress(_ context.Context, tenantName, device string) (tenant.DeviceAddress, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.addresses[tenantName+"/"+device]
+	if !ok {
+		return tenant.DeviceAddress{}, tenant.ErrNotFound
+	}
+	return s.withMAC(a), nil
+}
+
+func (s *Store) listAddresses(keep func(tenant.DeviceAddress) bool) []tenant.DeviceAddress {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.DeviceAddress
+	for _, a := range s.addresses {
+		if keep(a) {
+			out = append(out, s.withMAC(a))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
+	return out
+}
+
+func (s *Store) ListDeviceAddresses(_ context.Context, tenantName string) ([]tenant.DeviceAddress, error) {
+	return s.listAddresses(func(a tenant.DeviceAddress) bool { return a.Tenant == tenantName }), nil
+}
+
+func (s *Store) ListClassAddresses(_ context.Context, trustClass string) ([]tenant.DeviceAddress, error) {
+	return s.listAddresses(func(a tenant.DeviceAddress) bool { return a.TrustClass == trustClass }), nil
+}
+
+func (s *Store) SetDeviceAddressStatus(_ context.Context, tenantName, device string, status tenant.Status) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.addresses[tenantName+"/"+device]
+	if !ok {
+		return tenant.ErrNotFound
+	}
+	a.Status = status
+	s.addresses[tenantName+"/"+device] = a
+	return nil
+}
+
+func (s *Store) DeleteDeviceAddress(_ context.Context, tenantName, device string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.addresses, tenantName+"/"+device)
+	return nil
+}
+
 func (s *Store) PutBrokerAccount(_ context.Context, a tenant.BrokerAccount) (tenant.BrokerAccount, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -511,6 +601,13 @@ type Backends struct {
 	DashErr     error
 	dashNext    int
 
+	// Reservations is keyed by description, which is how the DHCP server's
+	// rows are told apart. Foreign holds what someone else already reserved
+	// there - inventory's hosts - keyed by MAC or by address.
+	Reservations    map[string]tenant.Reservation
+	Foreign         map[string]bool
+	FailReservation error
+
 	FailDNS, FailResolver, FailState, FailFabric error
 	FailNetwork, FailCompute, FailWireless       error
 }
@@ -524,6 +621,8 @@ func NewBackends() *Backends {
 		Forwards:       map[string]tenant.Forward{},
 		States:         map[string]tenant.StateTenant{},
 		WiFiKeys:       map[string]tenant.WiFiKeySpec{},
+		Reservations:   map[string]tenant.Reservation{},
+		Foreign:        map[string]bool{},
 		BrokerAccounts: map[string]tenant.BrokerAccount{},
 		LogTenants:     map[string]tenant.LogTenant{},
 		DashTenants:    map[string]tenant.DashTenant{},
@@ -539,6 +638,34 @@ func (b *Backends) Fabric() tenant.Fabric     { return fabricFake{b} }
 func (b *Backends) Network() tenant.Network   { return networkFake{b} }
 func (b *Backends) Compute() tenant.Compute   { return computeFake{b} }
 func (b *Backends) Wireless() tenant.Wireless { return wirelessFake{b} }
+
+// Reservations returns a stand-in for the DHCP server.
+func (b *Backends) DHCP() tenant.Reservations { return reservationsFake{b} }
+
+type reservationsFake struct{ b *Backends }
+
+func (f reservationsFake) EnsureReservation(_ context.Context, r tenant.Reservation) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailReservation != nil {
+		return f.b.FailReservation
+	}
+	if f.b.Foreign[r.MAC] || f.b.Foreign[r.Address] {
+		return fmt.Errorf("held by another reservation: %w", tenant.ErrAddressConflict)
+	}
+	f.b.Reservations[r.Description] = r
+	return nil
+}
+
+func (f reservationsFake) RemoveReservation(_ context.Context, description string) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailReservation != nil {
+		return f.b.FailReservation
+	}
+	delete(f.b.Reservations, description)
+	return nil
+}
 
 type wirelessFake struct{ b *Backends }
 
@@ -744,6 +871,13 @@ func MobileSite() tenant.Site {
 			"tenant_dev": {Name: "tenant_dev", SSID: "DVNTM-TD", VLAN: 45},
 		},
 		AdmissionClass: "tenant_dev",
+		AddressRanges: map[string]tenant.AddressRange{
+			"iot": {
+				Subnet: netip.MustParsePrefix("10.20.30.0/24"),
+				First:  netip.MustParseAddr("10.20.30.25"),
+				Last:   netip.MustParseAddr("10.20.30.200"),
+			},
+		},
 	}
 }
 
@@ -877,6 +1011,7 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		Network:      b.Network(),
 		Compute:      b.Compute(),
 		Wireless:     b.Wireless(),
+		Reservations: b.DHCP(),
 		BrokerWriter: b.BrokerWriter(),
 		LogWriter:    b.LogWriter(),
 		Dashboards:   b.Dashboards(),

@@ -9,6 +9,7 @@ package tenant
 
 import (
 	"fmt"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strings"
@@ -64,6 +65,26 @@ type TrustClass struct {
 	VLAN int
 }
 
+// AddressRange is the part of a trust class's network set aside for tenants'
+// fixed addresses (ADR-0035): above the substrate's own hosts and below the
+// dynamic pool, so a reservation never collides with either.
+//
+// Inventory decides it, like the trust classes themselves, and the deployment
+// role projects it here.
+type AddressRange struct {
+	Subnet      netip.Prefix
+	First, Last netip.Addr
+}
+
+// Contains reports whether addr is one a tenant may be given.
+func (r AddressRange) Contains(addr netip.Addr) bool {
+	return addr.Compare(r.First) >= 0 && addr.Compare(r.Last) <= 0
+}
+
+// DefaultAddressesPerTenant is how many fixed addresses one tenant may hold in
+// one trust class when the site does not say.
+const DefaultAddressesPerTenant = 16
+
 // Site is one site's constants. Every per-tenant identifier derives from these
 // and the index (ADR-0002); one API serves one site (ADR-0015 §8).
 type Site struct {
@@ -106,6 +127,14 @@ type Site struct {
 	// Wi-Fi keys, which is a legitimate site: one without a wireless
 	// controller, which is what was deployed before CHG-0013.
 	TrustClasses map[string]TrustClass
+
+	// AddressRanges is where tenants' fixed device addresses come from, by
+	// trust class (ADR-0035). Empty means the site reserves none, which is what
+	// every site did before CHG-0044.
+	AddressRanges map[string]AddressRange
+	// AddressesPerTenant caps one tenant's addresses in one trust class, so a
+	// shared range cannot be emptied by one tenant. Zero means the default.
+	AddressesPerTenant int
 
 	// AdmissionClass is the trust class an admission issues a key in, so a
 	// tenant developer can join the tenant developer network before the
@@ -183,6 +212,23 @@ func (s Site) Validate() error {
 			return fmt.Errorf("trust class %q has VLAN %d, outside 1-4094", name, tc.VLAN)
 		}
 	}
+	// A range for a class nobody can register a device in, or one that strays
+	// outside its own network, would hand out addresses that cannot work.
+	for name, r := range s.AddressRanges {
+		switch {
+		case s.TrustClasses[name].Name == "":
+			return fmt.Errorf("address range %q is not a served trust class", name)
+		case !r.Subnet.IsValid() || !r.First.Is4() || !r.Last.Is4():
+			return fmt.Errorf("address range %q is not an IPv4 subnet and range", name)
+		case !r.Subnet.Contains(r.First) || !r.Subnet.Contains(r.Last):
+			return fmt.Errorf("address range %q is outside its subnet %s", name, r.Subnet)
+		case r.First.Compare(r.Last) > 0:
+			return fmt.Errorf("address range %q ends before it starts", name)
+		}
+	}
+	if s.AddressesPerTenant < 0 {
+		return fmt.Errorf("addresses per tenant cannot be negative")
+	}
 	if s.AdmissionClass != "" {
 		if _, ok := s.TrustClasses[s.AdmissionClass]; !ok {
 			return fmt.Errorf("admission class %q is not a served trust class", s.AdmissionClass)
@@ -206,6 +252,14 @@ func (s Site) TrustClassNames() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// AddressQuota is how many fixed addresses one tenant may hold in one class.
+func (s Site) AddressQuota() int {
+	if s.AddressesPerTenant > 0 {
+		return s.AddressesPerTenant
+	}
+	return DefaultAddressesPerTenant
 }
 
 // Numbering is everything ADR-0002 derives from one index.

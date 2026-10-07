@@ -85,6 +85,9 @@ type Service struct {
 	// Wireless issues tenant Wi-Fi keys (ADR-0012 §3). Nil at a site with no
 	// wireless controller, where the Wi-Fi endpoints refuse rather than panic.
 	Wireless Wireless
+	// Reservations is the DHCP server on the device networks (ADR-0035). Nil at
+	// a site that sets no address range aside for tenants.
+	Reservations Reservations
 
 	// BrokerWriter puts MQTT accounts into the broker's auth database, through
 	// the writer on the messaging VM (CHG-0016). Nil at a site with no broker,
@@ -382,6 +385,13 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return err
 	}
 
+	// And its devices' fixed addresses: a reservation left on the DHCP server
+	// would hold an address in a shared range for a tenant that no longer exists.
+	addresses, err := s.Store.ListDeviceAddresses(ctx, name)
+	if err != nil {
+		return err
+	}
+
 	// Reverse of create: stop resolving the zones before they disappear.
 	steps := []struct {
 		name string
@@ -401,6 +411,14 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		{StepWiFiKey, func() error {
 			for _, k := range wifiKeys {
 				if err := s.removeKeyFromController(ctx, k); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{StepAddress, func() error {
+			for _, a := range addresses {
+				if err := s.removeReservation(ctx, a); err != nil {
 					return err
 				}
 			}
@@ -488,6 +506,9 @@ func (s *Service) CreateWorkload(ctx context.Context, tenantName string, req Wor
 	w, err := s.Store.GetWorkload(ctx, tenantName, req.Name)
 	switch {
 	case errors.Is(err, ErrNotFound):
+		if err := s.deviceHoldsName(ctx, tenantName, req.Name); err != nil {
+			return Workload{}, err
+		}
 		w = Workload{
 			Tenant:   tenantName,
 			Name:     req.Name,
@@ -610,8 +631,21 @@ func (s *Service) PutRecord(ctx context.Context, tenantName, name, address strin
 	if !ValidWorkloadName(name) {
 		return invalid("record name must be 1-20 lowercase alphanumerics or dashes, starting with a letter")
 	}
+	if err := s.deviceHoldsName(ctx, tenantName, name); err != nil {
+		return err
+	}
 	if !s.inTenantSubnet(rec, address) {
-		return invalid("address %s is not in the tenant's subnet %s", address, s.Site.Numbering(rec.Index).Subnet)
+		// The one address outside its own subnet a tenant may name is one it has
+		// reserved for a device (ADR-0035): the address is the substrate's, and
+		// the reservation is what says this tenant holds it.
+		held, err := s.holdsAddress(ctx, tenantName, address)
+		if err != nil {
+			return err
+		}
+		if !held {
+			return invalid("address %s is not in the tenant's subnet %s, and is not an address reserved for one of its devices",
+				address, s.Site.Numbering(rec.Index).Subnet)
+		}
 	}
 	if err := s.DNS.EnsureRecords(ctx, s.Site.Zone(tenantName), s.Site.Numbering(rec.Index).ReverseZone,
 		[]DNSRecord{{Name: name, Address: address}}); err != nil {
@@ -706,6 +740,14 @@ func (s *Service) ensure(ctx context.Context, rec Record) (Record, error) {
 		// Last, because it is the only step that changes the fabric, and the
 		// tenant's own resources depend on it rather than the other way round.
 		{StepNetwork, func() error { return s.network(ctx, rec) }},
+	}
+	// The tenant's fixed device addresses (ADR-0035). On a create there are
+	// none; on a reconcile this is what puts them back on a rebuilt router.
+	if s.Reservations != nil {
+		steps = append(steps, struct {
+			name string
+			run  func() error
+		}{StepAddress, func() error { return s.ensureAddresses(ctx, rec) }})
 	}
 	// The tenant's users in the log store (ADR-0027, CHG-0020), before the
 	// fabric step for the same reason as the others: the tenant's own

@@ -1,5 +1,7 @@
-// Package opnsense ensures the core router's resolver forwards each tenant zone
-// to the tenant DNS server (ADR-0004), through the OPNsense API.
+// Package opnsense is the core router, through the OPNsense API. It ensures the
+// resolver forwards each tenant zone to the tenant DNS server (ADR-0004), and
+// keeps tenants' device address reservations on the DHCP server (ADR-0035,
+// kea.go).
 //
 // The endpoints and payload are the ones the deevnet.net opnsense_dns role
 // already drives, verified there against OPNsense: query-forwarding rows live
@@ -22,7 +24,7 @@ import (
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 )
 
-// Client is a tenant.Resolver.
+// Client is a tenant.Resolver and a tenant.Reservations.
 type Client struct {
 	base        string // https://10.20.25.1/api
 	key, secret string
@@ -120,7 +122,7 @@ func (c *Client) Ensure(ctx context.Context, fwds []tenant.Forward) error {
 		}
 	}
 	if changed {
-		return c.reconfigure(ctx)
+		return c.reconfigure(ctx, "unbound")
 	}
 	return nil
 }
@@ -146,7 +148,7 @@ func (c *Client) Remove(ctx context.Context, domains []string) error {
 		changed = true
 	}
 	if changed {
-		return c.reconfigure(ctx)
+		return c.reconfigure(ctx, "unbound")
 	}
 	return nil
 }
@@ -163,15 +165,16 @@ func (c *Client) write(ctx context.Context, path string, body any, want string) 
 	return nil
 }
 
-func (c *Client) reconfigure(ctx context.Context) error {
+// reconfigure applies saved settings to a running service: "unbound" or "kea".
+func (c *Client) reconfigure(ctx context.Context, service string) error {
 	var res struct {
 		Status string `json:"status"`
 	}
-	if err := c.post(ctx, "/unbound/service/reconfigure", map[string]string{}, &res); err != nil {
-		return fmt.Errorf("reconfigure unbound: %w", err)
+	if err := c.post(ctx, "/"+service+"/service/reconfigure", map[string]string{}, &res); err != nil {
+		return fmt.Errorf("reconfigure %s: %w", service, err)
 	}
 	if res.Status != "ok" {
-		return fmt.Errorf("reconfigure unbound: status %q", res.Status)
+		return fmt.Errorf("reconfigure %s: status %q", service, res.Status)
 	}
 	return nil
 }

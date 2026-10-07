@@ -213,7 +213,7 @@ secrets except the log tokens and the dashboard password, or `502` as create doe
 
 | Status | When |
 |---|---|
-| `204` | the broker accounts, resolver forwards, zones, TSIG key, state user and policy are removed, then the registry row. State objects stay in the bucket |
+| `204` | the broker accounts, device address reservations, resolver forwards, zones, TSIG key, state user and policy are removed, then the registry row. State objects stay in the bucket |
 | `409` | the fabric still carries a zone of this name. The tenant destroys its own resources first |
 | `404` | not registered |
 | `502` | a backend step failed. The tenant is left `deleting`, and a second delete resumes it |
@@ -264,14 +264,17 @@ Names beside the workloads' own (ADR-0015 §13), such as eds's `palette` and `li
 | `GET /v1/tenants/{name}/records` | the names the tenant added |
 | `DELETE /v1/tenants/{name}/records/{record}` | removes one |
 
-The address must be in the tenant's own subnet. The tenant's TSIG key still works for anything it
-would rather publish itself (ADR-0004).
+The address must be in the tenant's own subnet, or be an address the tenant has
+[reserved for one of its devices](#device-addresses): a second name for a device, then, with no PTR.
+A name already published for a device's address is refused. The tenant's TSIG key still works for
+anything it would rather publish itself (ADR-0004).
 
 ## Devices
 
 A tenant's registry of its own edge devices (ADR-0012 §3). The entry **is** the device's identity:
-an application-owned device takes no substrate host record, leases from its trust class's pool, and
-is named in its owner's own zone (ADR-0011 open question 3).
+an application-owned device takes no substrate host record and is named in its owner's own zone
+(ADR-0011 open question 3). It leases from its trust class's pool unless its tenant reserves it a
+[fixed address](#device-addresses).
 
 `POST /v1/tenants/{name}/devices`
 
@@ -280,15 +283,16 @@ is named in its owner's own zone (ADR-0011 open question 3).
 ```
 
 - **The tenant chooses** the device's name, its trust class, and optionally records a MAC.
-- **`mac` is optional, and the substrate enforces nothing with it.** It is a label for the owner's
-  own inventory. A MAC is trivially spoofed on a shared segment, so binding to one stops nobody who
-  is trying, and it is explicitly not an authorization input (ADR-0020 §2). Two tenants may record
-  the same address. Supply it in any of `aa:bb:cc:dd:ee:ff`, `AA-BB-CC-DD-EE-FF` or `aabbccddeeff`;
+- **`mac` is optional, and is never an authorization input.** A MAC is trivially spoofed on a shared
+  segment, so binding to one stops nobody who is trying (ADR-0020 §2). Two tenants may record the
+  same address. The one thing it is used for is a [fixed address](#device-addresses), which needs it. Supply it in any of `aa:bb:cc:dd:ee:ff`, `AA-BB-CC-DD-EE-FF` or `aabbccddeeff`;
   it comes back lowercase and colon-separated.
 - **Calling it again converges.** The MAC is the one field that moves — swapping the hardware behind
-  a name is an inventory change, not a new device.
-- **A device gets no DHCP reservation and no substrate DNS name.** Publish whatever name you want in
-  your own zone with `records`, above.
+  a name is an inventory change, not a new device. A device that holds a fixed address keeps it: the
+  reservation moves to the new MAC. Clearing the MAC of such a device is a `400`, and a MAC that
+  already holds an address on that network is a `409`.
+- **Registering reserves nothing and names nothing.** A fixed address, and the name that goes with
+  it, is asked for separately, below.
 
 `201` with the entry. `400` for a trust class the site does not serve, and the error names the ones
 it does.
@@ -297,7 +301,7 @@ it does.
 |---|---|
 | `GET /v1/tenants/{name}/devices` | the tenant's devices |
 | `GET /v1/tenants/{name}/devices/{device}` | one device |
-| `DELETE /v1/tenants/{name}/devices/{device}` | deregisters it |
+| `DELETE /v1/tenants/{name}/devices/{device}` | deregisters it. `400` while it holds an address: remove that first |
 
 **A registry entry is identity, not authorization.** Registering a device grants it nothing. What a
 device is allowed to consume is carried by a credential it proves, at or above the transport layer
@@ -317,6 +321,61 @@ refuse them an identity.
 
 **This route needs no wireless controller.** Unlike Wi-Fi keys it writes to no backend, so a site
 without a controller still keeps a device registry.
+
+## Device addresses
+
+A fixed address for a registered device on its trust class's network (ADR-0035). The network is the
+substrate's and every tenant shares it, so the address is allocated from the part of it set aside for
+tenants, above the substrate's own hosts and below the dynamic pool.
+
+`POST /v1/tenants/{name}/devices/{device}/address`
+
+```json
+{ "address": "10.20.30.25" }
+```
+
+- **`address` is optional.** Without it the device gets the lowest free address. With it, that
+  address if it is in the tenant range and free. A tenant's state keeps the address it was given and
+  sends it back on a restore, which is how a device keeps its address across a lost registry.
+- **The device must be registered with a `mac`.** The reservation is made for that MAC; there is one
+  source for it, the device's own entry.
+- **Calling it again converges**, and never moves a device: asking for a different address while one
+  is held is a `400`. Remove the address, then ask.
+- **The device's name is published with it**: `<device>.<tenant zone>`, in the tenant's own zone, and
+  removed with it. No PTR is published. The reverse zone for the network is the substrate's.
+- **It is addressing, never authorization.** A reservation follows a MAC, which anyone on the segment
+  can copy (ADR-0020 §2). Nor does it change what can reach the device: that is the zone policy's.
+
+```json
+{
+  "tenant": "eds", "device": "stand-1", "trust_class": "iot",
+  "address": "10.20.30.25", "mac": "aa:bb:cc:dd:ee:ff",
+  "fqdn": "stand-1.eds.mobile.deevnet.net", "status": "ready"
+}
+```
+
+| Status | When |
+|---|---|
+| `201` | the reservation is on the DHCP server and the name is published |
+| `400` | the device is not registered or has no MAC; the address is outside the tenant range; the trust class has no range at this site; the device's name is already a workload's or a record's |
+| `409` | the MAC already holds an address on that network, or the address is taken. The answer does not say by whom: the network is shared. Also when the range is full, or the tenant holds its full share (16 unless the site says otherwise) |
+| `502` | the router or the DNS write did not land. The body carries `address`, the partial object, and the same call resumes it |
+
+A MAC or address the DHCP server already holds for a substrate host is a `409` too, and leaves
+nothing behind.
+
+| Route | Does |
+|---|---|
+| `GET /v1/tenants/{name}/devices/{device}/address` | the device's address, or `404` when it holds none |
+| `DELETE /v1/tenants/{name}/devices/{device}/address` | gives it back. `400` while a published record still points at it |
+
+**Giving an address back does not disconnect the device.** It leases from the pool at its next
+renewal, like any other.
+
+**A reconcile puts reservations back.** They live on the router, which inventory rebuilds without
+them, so `POST /v1/tenants/{name}/reconcile` re-ensures each one and its name.
+
+**A site that sets no range aside reserves none**, and these routes answer `400` with that reason.
 
 ## Wi-Fi keys
 

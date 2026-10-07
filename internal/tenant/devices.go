@@ -14,22 +14,22 @@ import (
 //
 // What a registry entry is: a tenant's own name for one of its devices, and the
 // trust class that device attaches under. What it is not: a network object. A
-// device takes no DHCP reservation, no substrate host record and no substrate
-// DNS name - it leases from its class's pool and its owner publishes whatever
-// name it wants in its own zone (ADR-0011 open question 3).
+// device takes no substrate host record and no substrate DNS name. It leases
+// from its class's pool, unless its tenant reserves it a fixed address, which
+// is a separate thing built on this entry (addresses.go, ADR-0035).
 //
-// Nothing here calls a backend. A Wi-Fi key has to reach the wireless
+// Registering calls no backend. A Wi-Fi key has to reach the wireless
 // controller before it means anything; a device entry means something the
 // moment it is written, because it is a fact about the tenant's own estate.
-// That is why there is no StepError, no Wireless dependency and no
-// provisioning status - a device is ready when its row exists.
+// The one backend call here is the reservation of a device that already holds
+// an address and whose MAC has just changed.
 
 // DeviceRequest is a tenant registering one of its devices.
 type DeviceRequest struct {
 	Name       string
 	TrustClass string
-	// MAC is optional. See Device.MAC: the substrate records it and enforces
-	// nothing with it.
+	// MAC is optional. See Device.MAC: it is never an authorization input, and
+	// is needed only by a device that is to hold a fixed address.
 	MAC string
 }
 
@@ -37,7 +37,9 @@ type DeviceRequest struct {
 //
 // Re-applying is a no-op except for the MAC, which is the one field a tenant
 // may correct in place: swapping the hardware behind a name is an inventory
-// change, not a new device.
+// change, not a new device. A device that holds a fixed address takes it along:
+// the reservation moves to the new MAC, so the replacement is found where the
+// old one was.
 func (s *Service) CreateDevice(ctx context.Context, tenantName string, req DeviceRequest) (Device, error) {
 	rec, err := s.Store.Get(ctx, tenantName)
 	if err != nil {
@@ -81,6 +83,33 @@ func (s *Service) CreateDevice(ctx context.Context, tenantName string, req Devic
 		}
 	}
 
+	// A device that holds an address has a reservation made for its MAC, so a
+	// changed MAC is a changed reservation - checked before anything is written.
+	held, err := s.Store.GetDeviceAddress(ctx, tenantName, req.Name)
+	holds := err == nil
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Device{}, err
+	}
+	moved := holds && existing.MAC != mac
+	if moved {
+		if mac == "" {
+			return Device{}, invalid("device %q holds the address %s, which is reserved for its mac; remove the address before clearing the mac",
+				req.Name, held.Address)
+		}
+		if s.Reservations == nil {
+			return Device{}, invalid("this API reserves no addresses")
+		}
+		others, err := s.Store.ListClassAddresses(ctx, held.TrustClass)
+		if err != nil {
+			return Device{}, err
+		}
+		for _, o := range others {
+			if o.MAC == mac && (o.Tenant != tenantName || o.Device != req.Name) {
+				return Device{}, ErrAddressConflict
+			}
+		}
+	}
+
 	d, err := s.Store.PutDevice(ctx, Device{
 		Tenant:     tenantName,
 		Name:       req.Name,
@@ -94,6 +123,15 @@ func (s *Service) CreateDevice(ctx context.Context, tenantName string, req Devic
 	s.audit(ctx, "device-create", tenantName, map[string]any{
 		"device": d.Name, "trust_class": d.TrustClass, "mac": d.MAC,
 	})
+	if moved {
+		held.MAC = d.MAC
+		if err := s.Store.SetDeviceAddressStatus(ctx, tenantName, d.Name, StatusProvisioning); err != nil {
+			return d, err
+		}
+		if _, err := s.pushAddress(ctx, held, false); err != nil {
+			return d, err
+		}
+	}
 	return d, nil
 }
 
@@ -117,6 +155,13 @@ func (s *Service) ListDevices(ctx context.Context, tenantName string) ([]Device,
 func (s *Service) DeleteDevice(ctx context.Context, tenantName, name string) error {
 	d, err := s.Store.GetDevice(ctx, tenantName, name)
 	if err != nil {
+		return err
+	}
+	// The address goes first, by its own route: dropping the row here would
+	// leave the reservation on the DHCP server with nothing to say whose it is.
+	if a, err := s.Store.GetDeviceAddress(ctx, tenantName, name); err == nil {
+		return invalid("device %q holds the address %s; remove the address first", name, a.Address)
+	} else if !errors.Is(err, ErrNotFound) {
 		return err
 	}
 	s.audit(ctx, "device-delete", tenantName, map[string]any{

@@ -25,6 +25,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	workloadRoutes(mux, h)
 	wifiKeyRoutes(mux, h)
 	deviceRoutes(mux, h)
+	addressRoutes(mux, h)
 	brokerAccountRoutes(mux, h)
 }
 
@@ -402,6 +403,12 @@ func (h *tenantHandlers) fail(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "the tenant still has workloads; destroy them first"})
 	case errors.Is(err, tenant.ErrWorkloadsExhausted):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "no free workload ordinal"})
+	case errors.Is(err, tenant.ErrAddressConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": tenant.ErrAddressConflict.Error()})
+	case errors.Is(err, tenant.ErrAddressesExhausted):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": tenant.ErrAddressesExhausted.Error()})
+	case errors.Is(err, tenant.ErrAddressQuota):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": tenant.ErrAddressQuota.Error()})
 	case errors.Is(err, tenant.ErrFabricInUse):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "the fabric still carries this tenant's zone; destroy the tenant's resources first"})
 	case errors.As(err, &inv):
