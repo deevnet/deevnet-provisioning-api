@@ -39,6 +39,10 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   type is added to that test's `wireSchemas` table. Behaviour a field cannot express (who may call,
   status codes, restore rules) goes in the operation's description or a guide under
   `site/content/docs/`.
+- **A change someone running or calling the API would notice adds a line to `CHANGELOG.md`**, under
+  `## Unreleased`, in the same commit. Tagging renames that heading to `## X.Y.Z (date)`. The site
+  renders the file as Release Notes. A new required variable or a changed default goes under
+  `### Upgrading`.
 - **Standard library first.** Routing is `net/http`'s `ServeMux` with method patterns. The
   dependencies are `pgx/v5` and `madmin-go/v3`, whose admin API encrypts request bodies, which is
   not worth reimplementing. Don't add a router or framework to get what the mux already does.

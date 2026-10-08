@@ -40,3 +40,14 @@ enableGitInfo = true
   [[module.mounts]]
     source = "../api/openapi.yaml"
     target = "static/openapi.yaml"
+  # The release notes are the repository's CHANGELOG.md, which has no front
+  # matter of its own; the cascade below gives the page its title and place.
+  [[module.mounts]]
+    source = "../CHANGELOG.md"
+    target = "content/docs/release-notes.md"
+
+[[cascade]]
+  title = "Release Notes"
+  weight = 7
+  [cascade._target]
+    path = "/docs/release-notes"
