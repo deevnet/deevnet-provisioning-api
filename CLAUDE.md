@@ -10,7 +10,8 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 being up.
 
 It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry,
-their devices' fixed addresses, their MQTT broker accounts, their log store tokens and their Grafana organisation (`docs/api-v1.md`).
+their devices' fixed addresses, their MQTT broker accounts, their log store tokens and their Grafana organisation (`api/openapi.yaml`, published at
+https://deevnet.github.io/deevnet-provisioning-api/).
 
 The repository name says what the service is for; the service itself, its binary, image and
 container keep the short name `deevnet-api`, which is what the `deevnet.mgmt` `deevnet_api` role
@@ -22,6 +23,8 @@ and the staged image path use.
 make test     # go test ./...
 make test-integration  # store and backend tests against throwaway PostgreSQL, PowerDNS, MinIO
 make vet      # go vet ./...
+make spec-lint  # lint api/openapi.yaml (needs node)
+make site     # the documentation site (Hugo) into site/public
 make build    # static binary in bin/
 make image    # podman build localhost/deevnet-api:<version>
 make stage    # save the image under the Builder's artifact root (needs a clean, tagged tree)
@@ -30,6 +33,12 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
 
 ## Rules that are easy to get wrong
 
+- **A route or wire field changes in `api/openapi.yaml` in the same commit.** The spec is written by
+  hand and is what the published reference renders. `internal/server/openapi_test.go` fails when a
+  `HandleFunc` pattern or a `*Body`/`*View` json field is missing from it, or the reverse; a new wire
+  type is added to that test's `wireSchemas` table. Behaviour a field cannot express (who may call,
+  status codes, restore rules) goes in the operation's description or a guide under
+  `site/content/docs/`.
 - **Standard library first.** Routing is `net/http`'s `ServeMux` with method patterns. The
   dependencies are `pgx/v5` and `madmin-go/v3`, whose admin API encrypts request bodies, which is
   not worth reimplementing. Don't add a router or framework to get what the mux already does.

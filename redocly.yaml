@@ -1,0 +1,9 @@
+# Lint rules for api/openapi.yaml (`make spec-lint`).
+extends:
+  - recommended
+rules:
+  # The repository carries no license file to name.
+  info-license: off
+  # /healthz, /readyz and /version take no input and no token: they have no
+  # client error to document.
+  operation-4xx-response: off

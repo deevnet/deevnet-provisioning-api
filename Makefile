@@ -39,7 +39,9 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.Built=$(BUILT)
 
-.PHONY: default help test test-integration vet build build-writer build-log-writer build-pi image stage stage-writer stage-log-writer stage-pi clean
+REDOCLY ?= npx --yes @redocly/cli@1.34.5
+
+.PHONY: default help test test-integration vet spec-lint site site-serve build build-writer build-log-writer build-pi image stage stage-writer stage-log-writer stage-pi clean
 
 default: help
 
@@ -49,6 +51,11 @@ help:
 	@echo "  test-integration"
 	@echo "          the same tests against throwaway PostgreSQL, PowerDNS, MinIO and Grafana containers"
 	@echo "  vet     go vet ./..."
+	@echo "  spec-lint"
+	@echo "          lint api/openapi.yaml (needs node; 'make test' is what holds it to the code)"
+	@echo "  site    build the documentation site into site/public"
+	@echo "  site-serve"
+	@echo "          serve the documentation site on localhost:1313"
 	@echo "  build   static binary in bin/"
 	@echo "  build-writer"
 	@echo "          the broker account writer, a host binary for the messaging VM"
@@ -64,7 +71,7 @@ help:
 	@echo "          build-pi, then install both under $(ARTIFACTS_ROOT)/binaries (sudo)"
 	@echo "  image   podman build $(IMAGE):$(VERSION)"
 	@echo "  stage   image, then save it under $(STAGE_DIR) (sudo)"
-	@echo "  clean   remove bin/"
+	@echo "  clean   remove bin/ and the built site"
 	@echo ""
 	@echo "VERSION=$(VERSION)"
 
@@ -128,6 +135,20 @@ test-integration:
 
 vet:
 	go vet ./...
+
+# api/openapi.yaml is written by hand. internal/server/openapi_test.go, which
+# `make test` runs, fails when it and the code disagree on a route or a wire
+# field; this checks that it is a well-formed OpenAPI document.
+spec-lint:
+	$(REDOCLY) lint api/openapi.yaml
+
+# The documentation site (site/): Hugo renders the guides, and the reference
+# page loads api/openapi.yaml into Redoc.
+site:
+	HUGO_PARAMS_VERSION=$(VERSION) hugo --source site --gc --minify
+
+site-serve:
+	HUGO_PARAMS_VERSION=$(VERSION) hugo server --source site --bind 0.0.0.0 --baseURL http://localhost:1313/deevnet-provisioning-api/
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/deevnet-api ./cmd/deevnet-api
@@ -197,4 +218,4 @@ stage-pi: build-pi
 	done
 
 clean:
-	rm -rf bin
+	rm -rf bin site/public site/resources

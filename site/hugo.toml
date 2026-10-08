@@ -1,0 +1,42 @@
+baseURL = "https://deevnet.github.io/deevnet-provisioning-api/"
+languageCode = "en-us"
+title = "Deevnet API"
+theme = "hugo-book"
+
+# Enable git-based last modified dates
+enableGitInfo = true
+
+[params]
+  BookTitle = "Deevnet API"
+  BookTheme = "auto"
+  BookToC = true
+  BookSearch = true
+  BookRepo = "https://github.com/deevnet/deevnet-provisioning-api"
+  BookSection = "docs"
+  # Resolve in-content /docs/... links through the theme, so they honor the
+  # baseURL subpath (/deevnet-provisioning-api/).
+  BookPortableLinks = true
+  description = "Reference and guides for the Deevnet API"
+  # The release the site was built from; `make site` sets it from git.
+  version = "dev"
+  # The viewer the reference page loads. Pinned: a floating version would let
+  # the reference change with no commit here.
+  redoc = "https://cdn.jsdelivr.net/npm/redoc@2.1.5/bundles/redoc.standalone.js"
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.tableOfContents]
+    startLevel = 1
+    endLevel = 3
+
+# The reference is not written here: it is rendered from ../api/openapi.yaml,
+# which internal/server/openapi_test.go holds to the routes and wire types.
+[module]
+  [[module.mounts]]
+    source = "content"
+    target = "content"
+  [[module.mounts]]
+    source = "../api/openapi.yaml"
+    target = "static/openapi.yaml"
