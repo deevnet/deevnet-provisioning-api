@@ -91,7 +91,7 @@ and local runs: there is then no enrollment and no encryption at rest.
 | `OPNSENSE_INSECURE_TLS`, `PROXMOX_INSECURE_TLS` | `false` | `true` only for a device still serving a self-signed certificate |
 | `MINIO_ADMIN_TLS` | `false` | `true` when the state store serves TLS |
 | `MINIO_ADMIN_CACERT` | | the CA the state store is verified against; required with `MINIO_ADMIN_TLS` |
-| `OMADA_INSECURE_TLS` | `true` | the wireless controller's self-signed certificate |
+| `OMADA_INSECURE_TLS` | `false` | `true` only for a wireless controller still serving a self-signed certificate |
 
 ## Optional capabilities
 

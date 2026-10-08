@@ -31,6 +31,7 @@ accounts, log store tokens and dashboard login, each where the site runs the ser
 | [Device Services](https://deevnet.github.io/deevnet-provisioning-api/docs/device-services/) | registry, fixed addresses, Wi-Fi keys, broker accounts |
 | [Conventions](https://deevnet.github.io/deevnet-provisioning-api/docs/conventions/) | ensures, partial objects, where secrets appear, errors |
 | [Configuration](https://deevnet.github.io/deevnet-provisioning-api/docs/configuration/) | every environment variable the service reads |
+| [Release Notes](https://deevnet.github.io/deevnet-provisioning-api/docs/release-notes/) | what changed in each version; the source is `CHANGELOG.md` |
 
 `api/openapi.yaml` (OpenAPI 3.1) is the contract, written by hand. `internal/server/openapi_test.go`
 fails when it and the code disagree on a route or a wire field, so a route or field change is made

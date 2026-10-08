@@ -46,6 +46,10 @@ Most callers never speak to it directly. A tenant declares what it wants in Terr
 <h3>Configuration</h3>
 <p>Every environment variable the service reads.</p>
 </a>
+<a class="section-card" href="docs/release-notes/">
+<h3>Release Notes</h3>
+<p>What changed in each version, and what to do when upgrading.</p>
+</a>
 </div>
 
 ## A first call
