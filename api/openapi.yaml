@@ -1,0 +1,1467 @@
+openapi: 3.1.0
+info:
+  title: Deevnet API
+  version: "1"
+  summary: The provisioning API behind the deevnet/deevnet Terraform provider.
+  description: |
+    The Deevnet API builds tenants on a Deevnet site: their network, DNS zone and state-store
+    credential, their workloads and published names, and the Wi-Fi keys, registry entries,
+    fixed addresses and MQTT broker accounts their devices need.
+
+    It is **provisioning-only**. Nothing at runtime depends on it being up.
+
+    Most callers never speak to it directly: tenants reach it through the
+    [`deevnet/deevnet` Terraform provider](https://deevnet.github.io/terraform-provider-deevnet/).
+
+    ## Conventions
+
+    - **Every create is an ensure.** Calling a create again for the same name converges on the
+      same object and never mints a second identity or secret.
+    - **A failed backend step answers `502` with the partial object.** The object, and any secret
+      issued with it, is in the body, so the caller records it and the same call resumes it.
+    - **Secrets appear in create responses only.** A read never returns one. The caller's own
+      state is the authoritative copy.
+    - **Errors are `{"error": "..."}`.** The text never names a backend host or carries a secret.
+    - **Unknown fields are refused** with `400`, and request bodies are capped at 64 KB.
+    - **`/v1` answers `503`** until the database schema is migrated, and tenant routes answer
+      `501` on an API that has no site configured.
+servers:
+  - url: "{endpoint}"
+    description: A site's API. The provider reads it from DEEVNET_API_ENDPOINT.
+    variables:
+      endpoint:
+        default: https://api.site.example:8080
+security:
+  - bearerAuth: []
+tags:
+  - name: Service
+    description: Liveness, readiness and version. Unauthenticated.
+  - name: Admissions
+    description: |
+      How a tenant name is admitted to a site. Operator only. An admission issues a single-use
+      enrollment token, which the tenant spends on its first create.
+  - name: Tenants
+    description: A tenant, its numbering, its DNS zone, and everything the site issues to it.
+  - name: Workloads
+    description: VMs in the tenant's network. The API derives each one's VMID, MAC and address.
+  - name: Records
+    description: Published names beside the workloads' own, in the tenant's zone.
+  - name: Devices
+    description: |
+      A tenant's registry of its own edge devices. An entry is identity, not authorization:
+      registering a device grants it nothing.
+  - name: Device addresses
+    description: A fixed address for a registered device on its trust class's network.
+  - name: Wi-Fi keys
+    description: A tenant's pre-shared key for one trust class. One key serves every device flashed with it.
+  - name: Broker accounts
+    description: A tenant's MQTT account on the platform broker, one per thing that connects.
+  - name: Fabric
+    description: What the exit node's agent reads.
+
+paths:
+  /healthz:
+    get:
+      tags: [Service]
+      operationId: getHealth
+      summary: Liveness
+      description: The process is up and serving. It never touches the database.
+      security: []
+      responses:
+        "200":
+          description: Alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+  /readyz:
+    get:
+      tags: [Service]
+      operationId: getReadiness
+      summary: Readiness
+      description: The API can do work, meaning its database answers and its schema is in place.
+      security: []
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+              example: { status: ok, database: ok }
+        "503":
+          description: The database is unreachable or still migrating. The reason is logged, not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+              example: { status: unavailable, database: unreachable }
+  /version:
+    get:
+      tags: [Service]
+      operationId: getVersion
+      summary: Version
+      security: []
+      responses:
+        "200":
+          description: The build that is serving.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, commit, built]
+                properties:
+                  version: { type: string, examples: [v0.10.0] }
+                  commit: { type: string }
+                  built: { type: string }
+
+  /v1/admissions:
+    post:
+      tags: [Admissions]
+      operationId: admitTenant
+      summary: Admit a tenant name
+      description: |
+        **Callers:** operator.
+
+        Issues a single-use enrollment token for `name`, valid for the site's enrollment TTL
+        (72 hours by default). The operator hands it to the tenant over a channel trusted with a
+        password.
+
+        At a site with a tenant developer network, the answer also carries `wifi`: the key the
+        tenant needs to reach the API at all. Admitting the same name again issues a new key, and
+        the previous one stops working. When the tenant creates itself, that key becomes its own
+        Wi-Fi key named `admission`.
+
+        Presenting an enrollment token for another name spends it and answers `401`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdmissionRequest" }
+            example: { name: tdemo, mac: "AA-BB-CC-00-11-22" }
+      responses:
+        "201":
+          description: Admitted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Admission" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/OperatorOnly" }
+        "409":
+          description: The name is already a registered tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "501":
+          description: Enrollment is not configured on this API. Only the operator creates tenants.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/admissions/{name}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    delete:
+      tags: [Admissions]
+      operationId: revokeAdmission
+      summary: Revoke an unused admission's Wi-Fi key
+      description: |
+        **Callers:** operator.
+
+        Revokes the Wi-Fi key of an admission that was never used. The enrollment token itself
+        just expires.
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/OperatorOnly" }
+        "404":
+          description: There is no unused admission for this name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+  /v1/tenants:
+    post:
+      tags: [Tenants]
+      operationId: createTenant
+      summary: Create, restore or resume a tenant
+      description: |
+        **Callers:** operator; the holder of an enrollment token for `name`, which spends it; or
+        the tenant itself with its own token, to resume or to restore.
+
+        A plain create sends only `name`. A **restore** sends back what the tenant's state holds:
+        the index and all three secrets. The API allocates an index, then ensures each backend
+        in order (DNS, resolver, state store, network, then the log store and dashboards
+        where the site has them) and marks the
+        tenant `ready`.
+
+        | Status | `outcome` | When |
+        |---|---|---|
+        | `201` | `created` | new name, no index requested |
+        | `201` | `restored` | new name to the registry, requested index kept |
+        | `201` | `reissued` | new name to the registry, requested index held by another tenant, so a new one was issued |
+        | `200` | `resumed` | name registered but not `ready`: a previous create failed part way. Without secrets, a new API token is issued |
+        | `200` | `reconciled` | name registered and `ready`, and the request carried all three secrets. They replace the stored ones |
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TenantRequest" }
+            examples:
+              create:
+                summary: A new tenant
+                value: { name: tdemo }
+              restore:
+                summary: A restore from the tenant's state
+                value:
+                  name: tdemo
+                  index: 2
+                  tsig_secret: <base64, at least 16 bytes>
+                  state_secret: <8-40 characters>
+                  api_token: <the tenant token the API issued>
+      responses:
+        "200":
+          description: Resumed or reconciled. Secrets are in the body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+        "201":
+          description: Created, restored or reissued. Secrets are in the body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+              examples:
+                created: { $ref: "#/components/examples/TenantCreated" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The name is registered and `ready` and no secrets were supplied, or no index is free.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: A backend step failed. The tenant is in status `provisioning`; calling create again resumes it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, examples: ['backend step "state" failed'] }
+                  tenant: { $ref: "#/components/schemas/Tenant" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Tenants]
+      operationId: listTenants
+      summary: List tenants
+      description: |
+        **Callers:** operator.
+
+        Every tenant, by index, without secrets.
+      responses:
+        "200":
+          description: The tenants.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tenants]
+                properties:
+                  tenants:
+                    type: array
+                    items: { $ref: "#/components/schemas/Tenant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/OperatorOnly" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    get:
+      tags: [Tenants]
+      operationId: getTenant
+      summary: Read a tenant
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The tenant, without secrets. `secrets_stored` says whether the API can still read the
+        ones it holds.
+      responses:
+        "200":
+          description: The tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Tenants]
+      operationId: deleteTenant
+      summary: Delete a tenant
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Removes the tenant's broker accounts, device address reservations, resolver forwards,
+        zones, DNS update key, state-store user and policy, dashboard login and organization, then
+        its registry row. State objects stay in the bucket.
+
+        The tenant destroys its own workloads first.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "409":
+          description: The tenant still has workloads, or the fabric still carries a zone of this name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: A backend step failed. The tenant is left `deleting`, and a second delete resumes it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/reconcile:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    post:
+      tags: [Tenants]
+      operationId: reconcileTenant
+      summary: Reconcile a tenant
+      description: |
+        **Callers:** operator.
+
+        Re-ensures every backend with the secrets the registry holds, device address
+        reservations included. It is the repair after a backend is rebuilt.
+
+        The answer carries no secrets except the log tokens and the dashboard password, which is
+        how a tenant created before those stores existed is handed them.
+      responses:
+        "200":
+          description: Reconciled, with `outcome` `reconciled`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/OperatorOnly" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+  /v1/tenants/{name}/workloads:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    post:
+      tags: [Workloads]
+      operationId: createWorkload
+      summary: Create or re-apply a workload
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The tenant chooses the name, sizing and keys. The API chooses everything else, and it is
+        stable for the workload's life:
+
+        - **ordinal:** the lowest free one for the tenant, reused after a delete
+        - **VMID:** `tenant VMID base + index * 40 + ordinal`
+        - **MAC:** derived from the VMID
+        - **address:** `.10 + ordinal` in the tenant's subnet
+        - **node, template, storage:** the site's; the template is the newest by name prefix
+
+        It also publishes `<name>.<tenant zone>` and the matching PTR. Calling it again for the
+        same name re-applies: the identity stays, the sizing is taken.
+
+        The keys land on the site's tenant account, which the response names as `login_user`. They
+        are written at first boot; changing them means rebuilding the workload.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkloadRequest" }
+            example: { name: web, cores: 2, memory_mb: 2048, disk_gb: 40, ssh_keys: ["ssh-ed25519 AAAA..."] }
+      responses:
+        "201":
+          description: The workload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workload" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "409":
+          description: The tenant has no free ordinal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The hypervisor or DNS step failed. The workload is in the body, so a retry resumes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  workload: { $ref: "#/components/schemas/Workload" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Workloads]
+      operationId: listWorkloads
+      summary: List a tenant's workloads
+      description: "**Callers:** operator, or the tenant itself. By ordinal."
+      responses:
+        "200":
+          description: The workloads.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workloads]
+                properties:
+                  workloads:
+                    type: array
+                    items: { $ref: "#/components/schemas/Workload" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/workloads/{workload}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - name: workload
+        in: path
+        required: true
+        description: The workload's name.
+        schema: { type: string }
+    get:
+      tags: [Workloads]
+      operationId: getWorkload
+      summary: Read a workload
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The workload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workload" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Workloads]
+      operationId: deleteWorkload
+      summary: Delete a workload
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Removes the VM and its published names.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+  /v1/tenants/{name}/records:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    get:
+      tags: [Records]
+      operationId: listRecords
+      summary: List the names a tenant added
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The records.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [records]
+                properties:
+                  records:
+                    type: array
+                    items: { $ref: "#/components/schemas/Record" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/records/{record}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - name: record
+        in: path
+        required: true
+        description: A DNS label under the tenant's zone.
+        schema: { type: string }
+    put:
+      tags: [Records]
+      operationId: putRecord
+      summary: Publish a name
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Publishes `<record>.<tenant zone>` and its PTR. The address must be in the tenant's own
+        subnet, or be an address the tenant has reserved for one of its devices: a second name
+        for a device, with no PTR. A name already published for a device's address is refused.
+
+        The tenant's DNS update key still works for anything it would rather publish itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordRequest" }
+            example: { address: 10.20.129.10 }
+      responses:
+        "200":
+          description: Published.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Records]
+      operationId: deleteRecord
+      summary: Remove a name
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "204": { description: Removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+  /v1/tenants/{name}/devices:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    post:
+      tags: [Devices]
+      operationId: registerDevice
+      summary: Register a device
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The tenant chooses the device's name and trust class, and optionally records a MAC.
+        Calling it again converges; the MAC is the one field that moves, because swapping the
+        hardware behind a name is an inventory change, not a new device. A device that holds a
+        fixed address keeps it: the reservation moves to the new MAC.
+
+        Registering reserves nothing and names nothing, and writes to no backend. A device cannot
+        change trust class; register it under a new name instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceRequest" }
+            example: { name: stand-1, trust_class: iot, mac: "aa:bb:cc:dd:ee:ff" }
+      responses:
+        "201":
+          description: The registry entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+        "400":
+          description: |
+            Invalid request: a trust class the site does not serve (the error names the ones it
+            does), or clearing the MAC of a device that holds a fixed address.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "409":
+          description: The new MAC already holds an address on that network.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Devices]
+      operationId: listDevices
+      summary: List a tenant's devices
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The devices.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [devices]
+                properties:
+                  devices:
+                    type: array
+                    items: { $ref: "#/components/schemas/Device" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/devices/{device}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - $ref: "#/components/parameters/device"
+    get:
+      tags: [Devices]
+      operationId: getDevice
+      summary: Read a device
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The registry entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Devices]
+      operationId: deregisterDevice
+      summary: Deregister a device
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Deregistering does not disconnect the device: it keeps whatever Wi-Fi key it was flashed
+        with, because that key belongs to the tenant rather than to the device.
+      responses:
+        "204": { description: Deregistered. }
+        "400":
+          description: The device still holds a fixed address. Remove that first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/devices/{device}/address:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - $ref: "#/components/parameters/device"
+    post:
+      tags: [Device addresses]
+      operationId: reserveDeviceAddress
+      summary: Reserve a fixed address for a device
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The device network is shared by every tenant, so the address is allocated from the part
+        of it set aside for tenants. Without `address` the device gets the lowest free one. A
+        tenant's state keeps the address it was given and sends it back on a restore.
+
+        The device must be registered with a `mac`; the reservation is made for that MAC. The
+        device's name is published with it, as `<device>.<tenant zone>`, with no PTR.
+
+        Calling it again converges and never moves a device: asking for a different address while
+        one is held is a `400`. It is addressing, never authorization.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddressRequest" }
+            examples:
+              any:
+                summary: The lowest free address
+                value: {}
+              particular:
+                summary: A particular address, as on a restore
+                value: { address: 10.20.30.25 }
+      responses:
+        "201":
+          description: The reservation is on the DHCP server and the name is published.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Address" }
+        "400":
+          description: |
+            The device is not registered or has no MAC; the address is outside the tenant range;
+            the trust class has no range at this site; the device's name is already a workload's
+            or a record's; or a different address is already held.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "409":
+          description: |
+            The MAC already holds an address on that network, or the address is taken. The answer
+            does not say by whom: the network is shared. Also when the range is full, or the
+            tenant holds its full share.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The router or the DNS write did not land. The body carries the partial object, and the same call resumes it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  address: { $ref: "#/components/schemas/Address" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Device addresses]
+      operationId: getDeviceAddress
+      summary: Read a device's address
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The reservation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Address" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: The device holds no address, or the tenant is not registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Device addresses]
+      operationId: releaseDeviceAddress
+      summary: Give a device's address back
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Giving an address back does not disconnect the device. It leases from the pool at its
+        next renewal, like any other.
+      responses:
+        "204": { description: Released. }
+        "400":
+          description: A published record still points at the address.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+  /v1/tenants/{name}/wifi-keys:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    post:
+      tags: [Wi-Fi keys]
+      operationId: issueWifiKey
+      summary: Issue or restore a Wi-Fi key
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The tenant chooses the key's name and trust class, and nothing else. The API chooses the
+        password, and takes the SSID and the VLAN from the trust class: a tenant never picks a
+        VLAN.
+
+        Calling it again keeps the key that is already issued. It does not mint a new one, since
+        every device flashed with the old one would stop associating. A key cannot change trust
+        class; issue a new key instead.
+
+        `psk` is supplied only to **restore** a key the tenant already holds, after the API has
+        lost its copy. The wireless controller is then made to match the devices.
+
+        At a site with no wireless controller these routes refuse with a reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WifiKeyRequest" }
+            example: { name: devices, trust_class: iot }
+      responses:
+        "201":
+          description: The key, with its `psk`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WifiKey" }
+        "400":
+          description: Invalid request, or a trust class the site does not serve; the error names the ones it does.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "502":
+          description: The controller step failed. The key is in the body with its `psk`, so a retry supplies the same one.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  wifi_key: { $ref: "#/components/schemas/WifiKey" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Wi-Fi keys]
+      operationId: listWifiKeys
+      summary: List a tenant's Wi-Fi keys
+      description: "**Callers:** operator, or the tenant itself. Never carries a `psk`."
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [wifi_keys]
+                properties:
+                  wifi_keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/WifiKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/wifi-keys/{key}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - name: key
+        in: path
+        required: true
+        description: The key's name.
+        schema: { type: string }
+    get:
+      tags: [Wi-Fi keys]
+      operationId: getWifiKey
+      summary: Read a Wi-Fi key
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        A read never returns the `psk`. It says whether the key still exists and, through
+        `secrets_stored`, whether the API's copy is still readable. When `secrets_stored` is
+        `false`, issue it again with the `psk` the tenant holds.
+      responses:
+        "200":
+          description: The key, without its `psk`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WifiKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Wi-Fi keys]
+      operationId: revokeWifiKey
+      summary: Revoke a Wi-Fi key
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Every device holding the key stops associating.
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+  /v1/tenants/{name}/broker-accounts:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    post:
+      tags: [Broker accounts]
+      operationId: issueBrokerAccount
+      summary: Issue or restore a broker account
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The tenant chooses the account's name, its topic patterns and, optionally, a device. The
+        API chooses the password and the username, which is `<tenant>-<name>`.
+
+        **Patterns are relative to the tenant.** The API writes the `<tenant>/` prefix itself, so
+        a tenant declares `lightstand/+/scene` and never its own name. They come back
+        **absolute**: what comes back is what the broker enforces. `#` means the whole of the
+        tenant's own tree and no more. A leading `/`, a `$SYS` filter, a `%`, or a `#` that is
+        not the last level is a `400`.
+
+        One direction may be empty; both empty is a `400`.
+
+        **`log` is reserved.** A device account may publish exactly `log/<its own device>` and may
+        not subscribe under `log/`; a workload account may subscribe under `log/` and may not
+        publish there. A pattern that reaches the log space without naming it, such as `#`, is
+        refused for a device account too.
+
+        Calling it again keeps the password already issued and returns no `password`: the API
+        holds a hash, not the plaintext. `password` is supplied only to **restore** an account
+        the tenant already holds.
+
+        Revocation and changes take effect at a client's next connection, not its current one.
+        At a site with no broker these routes refuse with a reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BrokerAccountRequest" }
+            example:
+              name: lightd
+              device: stand-1
+              publish: [lightstand/+/scene]
+              subscribe: [lightstand/+/state]
+      responses:
+        "201":
+          description: The account, with its `password` when this call minted or was given one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrokerAccount" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "502":
+          description: The writer step failed. The account is in the body with its `password`, so a retry supplies the same one.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  broker_account: { $ref: "#/components/schemas/BrokerAccount" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Broker accounts]
+      operationId: listBrokerAccounts
+      summary: List a tenant's broker accounts
+      description: "**Callers:** operator, or the tenant itself. Never carries a `password`."
+      responses:
+        "200":
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [broker_accounts]
+                properties:
+                  broker_accounts:
+                    type: array
+                    items: { $ref: "#/components/schemas/BrokerAccount" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/broker-accounts/{account}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - name: account
+        in: path
+        required: true
+        description: The account's name.
+        schema: { type: string }
+    get:
+      tags: [Broker accounts]
+      operationId: getBrokerAccount
+      summary: Read a broker account
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        A read never returns the `password`. The tenant's own state is the only copy.
+      responses:
+        "200":
+          description: The account, without its `password`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrokerAccount" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Broker accounts]
+      operationId: revokeBrokerAccount
+      summary: Revoke a broker account
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Revocation stops the next connection, not the current one.
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+  /v1/fabric/egress:
+    get:
+      tags: [Fabric]
+      operationId: listEgress
+      summary: List the VRFs of every ready tenant
+      description: |
+        **Callers:** operator, or the egress agent.
+
+        The exit node's agent reads this and renders the VRF default routes. The agent token
+        reads this one route and nothing else, so the exit node holds no operator credential.
+      responses:
+        "200":
+          description: The VRFs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vrfs]
+                properties:
+                  vrfs:
+                    type: array
+                    items: { $ref: "#/components/schemas/EgressVRF" }
+              example: { vrfs: [{ tenant: tdemo, vrf: vrf_tdemo }] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Every `/v1` request carries `Authorization: Bearer <token>`. The token is one of four
+        things, and each operation says which may call it.
+
+        | Token | What it is | May |
+        |---|---|---|
+        | **Operator** | the site's operator token | everything |
+        | **Tenant** | `dvt1.<tenant>.<nonce>.<mac>`, returned by create | its own tenant's routes. Another tenant's name answers `404`; an operator-only route answers `403` |
+        | **Enrollment** | single-use, from an admission | create the one tenant it was issued for, once |
+        | **Egress agent** | the exit node's token | read the egress list, nothing else |
+
+        A tenant token carries a MAC the API verifies without its registry, so a genuine token
+        still identifies its tenant after the registry is lost, and may restore that tenant and
+        nothing else. For a registered tenant it is also checked against the registry's hash, so
+        a replaced token is revoked.
+  parameters:
+    tenant:
+      name: name
+      in: path
+      required: true
+      description: The tenant's name.
+      schema: { type: string, pattern: "^[a-z][a-z0-9]{0,7}$" }
+      example: tdemo
+    device:
+      name: device
+      in: path
+      required: true
+      description: The device's name in the tenant's registry.
+      schema: { type: string }
+      example: stand-1
+  responses:
+    Unauthorized:
+      description: No token, or one the API does not recognize.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, const: 'Bearer realm="deevnet-api"' }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: unauthorized }
+    OperatorOnly:
+      description: A tenant token on an operator-only route.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: operator only }
+    Invalid:
+      description: Invalid request. The body says why.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TenantNotFound:
+      description: The tenant is not registered, or the token is another tenant's.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: tenant not found }
+    NotFound:
+      description: No such object, the tenant is not registered, or the token is another tenant's.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    StepFailed:
+      description: A backend step failed. The body names the step only; the same call resumes it.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: 'backend step "dns" failed' }
+    NotMigrated:
+      description: The database schema is not migrated yet.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: database not migrated yet }
+  examples:
+    TenantCreated:
+      summary: A created tenant
+      value:
+        name: tdemo
+        index: 2
+        status: ready
+        outcome: created
+        created_at: "2026-09-17T13:34:40Z"
+        updated_at: "2026-09-17T13:34:40Z"
+        network: { vrf_vni: 10002, vnet_vni_base: 20020, subnet: 10.20.130.0/24, gateway: 10.20.130.1 }
+        fabric: { controller_id: evpn1, node: hyp002 }
+        dns:
+          zone: tdemo.site.example
+          reverse_zone: 130.20.10.in-addr.arpa
+          update_server: tdns.site.example
+          tsig_key_name: tdemo
+          tsig_algorithm: hmac-sha256
+          tsig_secret: <issued>
+        state:
+          endpoint: https://tfstate.site.example:9000
+          bucket: tf-state
+          key_prefix: tenants/tdemo/
+          access_key: tdemo
+          secret_key: <issued>
+        log:
+          endpoint: https://logs.site.example:8427
+          account_id: 2
+          select_header: X-Deevnet-Partition
+          ingest_token: <issued>
+          read_token: <issued>
+        dashboard:
+          url: https://dashboards.site.example:3000
+          org_id: 3
+          username: tdemo
+          password: <issued>
+        api_token: <issued>
+        secrets_stored: true
+        steps:
+          - { name: dns, ok: true, updated_at: "2026-09-17T13:34:38Z" }
+          - { name: resolver, ok: true, updated_at: "2026-09-17T13:34:38Z" }
+          - { name: state, ok: true, updated_at: "2026-09-17T13:34:39Z" }
+          - { name: network, ok: true, updated_at: "2026-09-17T13:34:39Z" }
+          - { name: log-store, ok: true, updated_at: "2026-09-17T13:34:39Z" }
+          - { name: dashboards, ok: true, updated_at: "2026-09-17T13:34:40Z" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    Readiness:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, unavailable] }
+        database: { type: string, enum: [ok, unreachable, migrating] }
+    AdmissionRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9]{0,7}$"
+          description: The tenant name to admit.
+        mac:
+          type: string
+          description: |
+            Optional. Binds the admission's Wi-Fi key to one computer. Accepted as
+            `aa:bb:cc:dd:ee:ff`, `AA-BB-CC-DD-EE-FF` or `aabbccddeeff`.
+    Admission:
+      type: object
+      required: [name, enrollment_token, expires_at]
+      properties:
+        name: { type: string }
+        enrollment_token:
+          type: string
+          description: Single-use. The tenant presents it as its bearer token on its first create.
+        expires_at: { type: string, format: date-time }
+        wifi:
+          type: object
+          description: The tenant's key for the tenant developer network. Absent at a site that serves none.
+          required: [ssid, psk]
+          properties:
+            ssid: { type: string }
+            psk: { type: string }
+            mac: { type: string, description: "The client the key is bound to, lowercase and colon-separated." }
+      example:
+        name: tdemo
+        enrollment_token: <issued>
+        expires_at: "2026-09-20T16:58:53Z"
+        wifi: { ssid: SITE-TD, psk: <issued>, mac: "aa:bb:cc:00:11:22" }
+    TenantRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9]{0,7}$"
+          description: The SDN zone id, a DNS label and a state-store user, hence the limits.
+        index:
+          type: integer
+          minimum: 1
+          maximum: 62
+          description: Optional. The index the tenant's state holds, on a restore. 63 is reserved and never allocated.
+        tsig_secret:
+          type: string
+          description: Restore only. Base64, at least 16 bytes. All three secrets are sent, or none.
+        state_secret:
+          type: string
+          minLength: 8
+          maxLength: 40
+          description: Restore only.
+        api_token:
+          type: string
+          description: Restore only. Must be a token the API issued for `name`.
+    TenantNetwork:
+      type: object
+      required: [vrf_vni, vnet_vni_base, subnet, gateway]
+      properties:
+        vrf_vni: { type: integer, description: VXLAN id of the tenant's VRF. }
+        vnet_vni_base: { type: integer, description: First VXLAN id of the tenant's VNets. }
+        subnet: { type: string, description: "The tenant's overlay subnet, in CIDR form." }
+        gateway: { type: string, description: The anycast gateway on that subnet. }
+    TenantFabric:
+      type: object
+      required: [controller_id, node]
+      properties:
+        controller_id: { type: string, description: The EVPN controller the tenant's zone attaches to. }
+        node: { type: string, description: The hypervisor the tenant's workloads land on. }
+    TenantDNS:
+      type: object
+      required: [zone, reverse_zone, update_server, tsig_key_name, tsig_algorithm]
+      properties:
+        zone: { type: string }
+        reverse_zone: { type: string }
+        update_server: { type: string, description: "Where RFC 2136 updates go, if the tenant publishes names itself." }
+        tsig_key_name: { type: string }
+        tsig_algorithm: { type: string }
+        tsig_secret: { type: string, description: Create responses only. }
+    TenantState:
+      type: object
+      required: [endpoint, bucket, key_prefix, access_key]
+      properties:
+        endpoint: { type: string }
+        bucket: { type: string }
+        key_prefix: { type: string, description: The prefix this tenant may write. }
+        access_key: { type: string }
+        secret_key: { type: string, description: Create responses only. }
+    TenantLog:
+      type: object
+      description: |
+        The tenant's access to the log store. `account_id` is its partition family: project 0 is
+        what its own workloads ship, 1 what the substrate publishes about it, and 2 its devices'
+        logs arriving over MQTT. A reader selects between them with the `select_header`, for
+        example `X-Deevnet-Partition: 2-1`; without it a read returns project 0.
+      required: [account_id]
+      properties:
+        endpoint: { type: string, description: Absent at a site with no log store. }
+        account_id: { type: integer }
+        select_header: { type: string }
+        ingest_token: { type: string, description: Create and reconcile responses only. }
+        read_token: { type: string, description: Create and reconcile responses only. }
+    TenantDashboard:
+      type: object
+      description: |
+        The tenant's dashboard login: an Editor in its own organization and a member of no
+        other. Empty at a site with no dashboard server.
+      properties:
+        url: { type: string }
+        org_id: { type: integer }
+        username: { type: string }
+        password: { type: string, description: Create and reconcile responses only. }
+    TenantStep:
+      type: object
+      description: One backend step's outcome. The error text is never returned; it is in the log.
+      required: [name, ok, updated_at]
+      properties:
+        name: { type: string, examples: [dns, resolver, state, network, device-address, log-store, dashboards] }
+        ok: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    Tenant:
+      type: object
+      required: [name, index, status, created_at, updated_at, network, fabric, dns, state, log, dashboard, secrets_stored, steps]
+      properties:
+        name: { type: string }
+        index: { type: integer, description: The tenant index every identifier derives from. }
+        status: { type: string, description: "`provisioning`, `ready` or `deleting`." }
+        outcome:
+          type: string
+          enum: [created, restored, reissued, resumed, reconciled]
+          description: What a create or reconcile did. Absent on a read.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        network: { $ref: "#/components/schemas/TenantNetwork" }
+        fabric: { $ref: "#/components/schemas/TenantFabric" }
+        dns: { $ref: "#/components/schemas/TenantDNS" }
+        state: { $ref: "#/components/schemas/TenantState" }
+        log: { $ref: "#/components/schemas/TenantLog" }
+        dashboard: { $ref: "#/components/schemas/TenantDashboard" }
+        api_token:
+          type: string
+          description: The tenant's own token. Present when this call generated or received one.
+        secrets_stored:
+          type: boolean
+          description: |
+            False when the API holds secrets for this tenant that it can no longer read. The
+            tenant's state is the authoritative copy, so this is how a tenant learns to supply
+            them again.
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/TenantStep" }
+    WorkloadRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, description: "A DNS label under the tenant's zone, 1-20 lowercase alphanumerics or dashes." }
+        cores: { type: integer, default: 2 }
+        memory_mb: { type: integer, default: 2048 }
+        disk_gb: { type: integer, description: Grows the template's disk and never shrinks it. }
+        ssh_keys:
+          type: array
+          items: { type: string }
+          description: Public keys for the site's tenant account. Written at first boot.
+    Workload:
+      type: object
+      required: [tenant, name, fqdn, status, ordinal, vmid, mac, address, cores, memory_mb, created_at, updated_at]
+      properties:
+        tenant: { type: string }
+        name: { type: string }
+        fqdn: { type: string }
+        login_user: { type: string, description: "The account the keys landed on: `ssh <login_user>@<fqdn>`." }
+        status: { type: string }
+        ordinal: { type: integer }
+        vmid: { type: integer }
+        mac: { type: string }
+        address: { type: string }
+        cores: { type: integer }
+        memory_mb: { type: integer }
+        disk_gb: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RecordRequest:
+      type: object
+      required: [address]
+      additionalProperties: false
+      properties:
+        address: { type: string, description: "An address in the tenant's subnet, or one reserved for one of its devices." }
+    Record:
+      type: object
+      required: [name, fqdn, address]
+      properties:
+        name: { type: string }
+        fqdn: { type: string }
+        address: { type: string }
+    DeviceRequest:
+      type: object
+      required: [name, trust_class]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        trust_class: { type: string, description: "One of the trust classes the site serves, such as `iot`." }
+        mac:
+          type: string
+          description: |
+            Optional, and never an authorization input: a MAC is trivially spoofed on a shared
+            segment. It is needed only for a fixed address. Comes back lowercase and
+            colon-separated.
+    Device:
+      type: object
+      required: [tenant, name, trust_class, status, created_at, updated_at]
+      properties:
+        tenant: { type: string }
+        name: { type: string }
+        trust_class: { type: string }
+        mac: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AddressRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        address: { type: string, description: Optional. Empty takes the lowest free address in the tenant range. }
+    Address:
+      type: object
+      required: [tenant, device, trust_class, address, mac, fqdn, status, created_at, updated_at]
+      properties:
+        tenant: { type: string }
+        device: { type: string }
+        trust_class: { type: string }
+        address: { type: string }
+        mac: { type: string, description: "The device's MAC, as registered: what the address is reserved for." }
+        fqdn: { type: string, description: "The name published for the device, in the tenant's zone." }
+        status: { type: string, description: "`ready` once the reservation is on the DHCP server and the name is published." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      example:
+        tenant: tdemo
+        device: stand-1
+        trust_class: iot
+        address: 10.20.30.25
+        mac: "aa:bb:cc:dd:ee:ff"
+        fqdn: stand-1.tdemo.site.example
+        status: ready
+        created_at: "2026-10-06T14:02:11Z"
+        updated_at: "2026-10-06T14:02:12Z"
+    WifiKeyRequest:
+      type: object
+      required: [name, trust_class]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        trust_class: { type: string }
+        psk:
+          type: string
+          minLength: 8
+          maxLength: 63
+          description: Restore only. 8 to 63 visible ASCII characters. Left empty, the API mints one.
+        mac:
+          type: string
+          description: Optional. Binds the key to one client. Re-applying without it unbinds the key.
+    WifiKey:
+      type: object
+      required: [tenant, name, trust_class, ssid, vlan, status, secrets_stored, created_at, updated_at]
+      properties:
+        tenant: { type: string }
+        name: { type: string }
+        trust_class: { type: string }
+        ssid: { type: string, description: "Reported, never chosen. The same trust class is a different SSID at another site." }
+        vlan: { type: integer, description: "Reported, never chosen." }
+        mac: { type: string }
+        status: { type: string }
+        psk: { type: string, description: "Create responses only, never a read." }
+        secrets_stored: { type: boolean, description: False when the API holds a key it can no longer read. }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    BrokerAccountRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        device: { type: string, description: "Optional. Empty means a workload account. A named device must be the tenant's and in trust class `iot`." }
+        publish:
+          type: array
+          items: { type: string }
+          description: Topic patterns, relative to the tenant.
+        subscribe:
+          type: array
+          items: { type: string }
+          description: Topic patterns, relative to the tenant.
+        password: { type: string, description: Restore only. A tenant never chooses a new account's password. }
+    BrokerAccount:
+      type: object
+      required: [tenant, name, username, publish, subscribe, status, created_at, updated_at]
+      properties:
+        tenant: { type: string }
+        name: { type: string }
+        device: { type: string }
+        username: { type: string, description: "What the broker knows the account as: `<tenant>-<name>`." }
+        publish:
+          type: array
+          items: { type: string }
+          description: Absolute patterns, prefix included; what the broker enforces.
+        subscribe:
+          type: array
+          items: { type: string }
+          description: Absolute patterns, prefix included; what the broker enforces.
+        status: { type: string }
+        password: { type: string, description: "Only when this call minted or was given one, never a read." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EgressVRF:
+      type: object
+      required: [tenant, vrf]
+      properties:
+        tenant: { type: string }
+        vrf: { type: string }

@@ -1,0 +1,35 @@
+# Tests and the specification gate. `make test` carries the tests that hold
+# api/openapi.yaml to the routes and wire types; the lint checks that it is a
+# well-formed OpenAPI document.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make vet
+      # Store and backend tests skip without their services; `make
+      # test-integration` runs them on the Builder.
+      - run: make test
+
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: make spec-lint

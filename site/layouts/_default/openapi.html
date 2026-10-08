@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="{{ .Site.Language.Lang }}">
+{{- /* The API reference: Redoc renders api/openapi.yaml in the browser. It is a
+       page of its own rather than a book page because the viewer needs the
+       full width for its three columns. Read-only on purpose: the API is not
+       reachable from the internet, so a try-it console could only fail. */ -}}
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ .Title }} | {{ .Site.Title }}</title>
+  <meta name="description" content="{{ .Site.Params.description }}">
+  <style>
+    :root { --bar-bg: #ffffff; --bar-fg: #1e293b; --bar-border: #e2e8f0; --accent: #2563eb; --page-bg: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bar-bg: #1e1e2e; --bar-fg: #e2e8f0; --bar-border: #334155; --accent: #60a5fa; --page-bg: #1a1a2e; }
+    }
+    body { margin: 0; background: var(--page-bg); }
+    .ref-bar {
+      display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: baseline;
+      padding: 0.7rem 1rem; border-bottom: 1px solid var(--bar-border);
+      background: var(--bar-bg); color: var(--bar-fg);
+      font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .ref-bar a { color: var(--accent); text-decoration: none; }
+    .ref-bar a:hover { text-decoration: underline; }
+    .ref-bar .home { font-weight: 600; }
+    .ref-bar .spacer { flex: 1; }
+    .ref-fallback { padding: 2rem 1rem; color: var(--bar-fg); font: 16px/1.5 system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <nav class="ref-bar">
+    <a class="home" href="{{ "/" | relURL }}">{{ .Site.Title }}</a>
+    <span>Reference, {{ .Site.Params.version }}</span>
+    <span class="spacer"></span>
+    <a href="{{ "docs/authentication/" | relURL }}">Guides</a>
+    <a href="{{ "openapi.yaml" | relURL }}">openapi.yaml</a>
+    <a href="{{ .Site.Params.BookRepo }}">Source</a>
+  </nav>
+  <div id="redoc">
+    <noscript>
+      <p class="ref-fallback">The reference is rendered in the browser and needs JavaScript. The
+      specification itself is plain text: <a href="{{ "openapi.yaml" | relURL }}">openapi.yaml</a>.</p>
+    </noscript>
+  </div>
+  <script src="{{ .Site.Params.redoc }}"></script>
+  <script>
+    (function () {
+      var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var theme = {
+        typography: { fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+                      headings: { fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' } },
+        colors: { primary: { main: dark ? "#60a5fa" : "#2563eb" } }
+      };
+      if (dark) {
+        theme.colors.text = { primary: "#e2e8f0", secondary: "#94a3b8" };
+        theme.colors.border = { dark: "#334155", light: "#334155" };
+        theme.sidebar = { backgroundColor: "#1e1e2e", textColor: "#e2e8f0" };
+        theme.rightPanel = { backgroundColor: "#11111b" };
+        theme.schema = { nestedBackground: "#1e1e2e", typeNameColor: "#94a3b8", typeTitleColor: "#94a3b8" };
+        theme.typography.code = { color: "#f0abfc", backgroundColor: "#1e1e2e" };
+        theme.typography.links = { color: "#60a5fa" };
+      }
+      Redoc.init({{ "openapi.yaml" | relURL }}, {
+        theme: theme,
+        hideDownloadButton: true,
+        expandResponses: "200,201",
+        sortTagsAlphabetically: false,
+        pathInMiddlePanel: true
+      }, document.getElementById("redoc"));
+    })();
+  </script>
+</body>
+</html>

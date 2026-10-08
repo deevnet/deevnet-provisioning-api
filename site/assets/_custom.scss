@@ -1,0 +1,215 @@
+// =============================================================================
+// Deevnet API docs: custom styles (shared look with deevnet-docs)
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Brand Colors & CSS Custom Properties
+// -----------------------------------------------------------------------------
+
+:root {
+  --accent-color: #2563eb;
+  --accent-light: #dbeafe;
+  --accent-dark: #1d4ed8;
+  --bg-subtle: #f8fafc;
+  --bg-card: #ffffff;
+  --border-color: #e2e8f0;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --text-muted: #64748b;
+  --badge-planned: #d97706;
+  --badge-deprecated: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent-color: #60a5fa;
+    --accent-light: #1e3a5f;
+    --accent-dark: #93bbfd;
+    --bg-subtle: #1a1a2e;
+    --bg-card: #1e1e2e;
+    --border-color: #334155;
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --text-muted: #94a3b8;
+    --badge-planned: #fbbf24;
+    --badge-deprecated: #f87171;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// TOC (right-side navigation) — tighten link spacing
+// -----------------------------------------------------------------------------
+
+.book-toc nav ul a {
+  padding: 0.25em 0;
+}
+
+// -----------------------------------------------------------------------------
+// Typography
+// -----------------------------------------------------------------------------
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  font-weight: 600;
+}
+
+.markdown h1 {
+  border-bottom: 3px solid var(--accent-color);
+  padding-bottom: 0.4em;
+  margin-bottom: 0.8em;
+}
+
+.markdown h2 {
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.3em;
+}
+
+// -----------------------------------------------------------------------------
+// Tables
+// -----------------------------------------------------------------------------
+
+// A table wider than the text column used to be CLIPPED: `overflow: hidden` is
+// what rounds the corners, and on a table it also cuts off whatever does not
+// fit - the right-hand columns disappeared with no scrollbar to say so.
+// `display: block` makes the table its own scroll container, so the corners
+// stay round and a wide table scrolls instead of losing content.
+.markdown table {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+
+  thead tr {
+    background: var(--accent-color);
+    color: #ffffff;
+  }
+
+  thead th {
+    border-bottom: none;
+    padding: 0.6em 1em;
+    font-weight: 600;
+  }
+
+  tbody tr:hover {
+    background: var(--accent-light);
+  }
+
+  td {
+    padding: 0.5em 1em;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Code Blocks
+// -----------------------------------------------------------------------------
+
+.markdown pre {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+// Mermaid draws dark lines and text (theme "default"), so its block keeps a
+// light background in dark mode too, rather than the theme's code-block gray.
+.markdown pre.mermaid {
+  background: #f5f5f5;
+}
+
+// -----------------------------------------------------------------------------
+// Landing Hero
+// -----------------------------------------------------------------------------
+
+.landing-hero {
+  text-align: center;
+  padding: 0 1rem 1.5rem;
+  margin-bottom: 2rem;
+  border-bottom: 2px solid var(--border-color);
+
+  h1 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    border-bottom: none;
+    margin-top: 0;
+    margin-bottom: 0.3em;
+    color: var(--accent-color);
+  }
+
+  .subtitle {
+    font-size: 1.15rem;
+    color: var(--text-muted);
+    max-width: 600px;
+    margin: 0 auto;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Section Cards
+// -----------------------------------------------------------------------------
+
+.section-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.section-card {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.2rem;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+
+  &:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+  }
+
+  h3 {
+    margin: 0 0 0.4em;
+    font-size: 1.05rem;
+    color: var(--accent-color);
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Hint Shortcode — Left Border Style
+// -----------------------------------------------------------------------------
+
+.book-hint {
+  border: none;
+  border-left: 4px solid;
+  border-radius: 0 6px 6px 0;
+  padding: 0.8rem 1rem;
+  margin: 1rem 0;
+  background: var(--bg-subtle);
+
+  &.info {
+    border-left-color: var(--accent-color);
+  }
+
+  &.warning {
+    border-left-color: var(--badge-planned);
+  }
+
+  &.danger {
+    border-left-color: var(--badge-deprecated);
+  }
+}

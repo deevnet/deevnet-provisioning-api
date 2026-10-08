@@ -1,0 +1,6 @@
+{{- /* Overrides hugo-book's hint, which passes .Inner through safeHTML, so the
+       Markdown inside a {{< hint >}} (links, bold, code) was printed raw.
+       This renders it as Markdown instead. */ -}}
+<blockquote class="book-hint {{ .Get 0 }}">
+  {{ .Inner | .Page.RenderString (dict "display" "block") }}
+</blockquote>

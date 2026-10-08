@@ -1,0 +1,18 @@
+<div class="flex flex-wrap justify-between">
+
+{{ if .GitInfo }}
+  <div>
+    {{- $date := partial "docs/date" (dict "Date" .GitInfo.AuthorDate.Local "Format" .Site.Params.BookDateFormat) -}}
+    <span class="flex align-center">
+      <img src="{{ "svg/calendar.svg" | relURL }}" class="book-icon" alt="" />
+      <span>Page last modified: {{ $date }}</span>
+    </span>
+  </div>
+{{ end }}
+
+</div>
+
+{{ $script := resources.Get "clipboard.js" | resources.Minify }}
+{{ with $script.Content }}
+  <script>{{ . | safeJS }}</script>
+{{ end }}
