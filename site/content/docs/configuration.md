@@ -1,6 +1,6 @@
 ---
 title: "Configuration"
-weight: 6
+weight: 7
 ---
 
 # Configuration
@@ -95,7 +95,7 @@ and local runs: there is then no enrollment and no encryption at rest.
 
 ## Optional capabilities
 
-**Each device-facing capability is turned on by one variable, and a site may leave any of them
+**Each of these capabilities is turned on by one variable, and a site may leave any of them
 off.** An unset capability is not a degraded state: its routes refuse with a reason, and a site
 with no wireless controller or no broker is a legitimate site.
 
@@ -145,3 +145,13 @@ already go to.
 
 Dashboards need the log store: `DEEVNET_LOG_ENDPOINT` and `DEEVNET_LOG_WRITER_ADDR` are required
 with them, because a tenant's data sources carry its log read token.
+
+### Service certificates
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENBAO_TENANT_SERVICE_MOUNT` | | the Tenant Service CA's PKI mount in OpenBao, for example `pki-tenant-service`; turns certificates on. It needs `OPENBAO_ADDR`: the CA is in OpenBao, and nowhere else |
+| `OPENBAO_TENANT_SERVICE_ROLE` | `tenant-service` | the one role on that mount the service signs on |
+
+They need no credential of their own. The service's AppRole policy must allow `update` on
+`<mount>/sign/<role>` and nothing else on the mount.

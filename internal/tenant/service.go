@@ -101,12 +101,19 @@ type Service struct {
 	// Dashboards maintains each tenant's organisation in the dashboard server
 	// (ADR-0024, CHG-0024). Nil when the site has none.
 	Dashboards Dashboards
+	// Signer has the site's Tenant Service CA sign a tenant's request for a
+	// server certificate (ADR-0037). Nil at a site with no such CA, where the
+	// certificate routes refuse with a reason.
+	Signer CertificateSigner
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.
 	Enroller      Enroller
 	EnrollmentTTL time.Duration
 	Logger        *slog.Logger
+	// Now is the clock. Nil is the wall clock; a test sets it to move a
+	// certificate towards its expiry.
+	Now func() time.Time
 
 	// sdn serialises SDN applies, which are cluster-wide.
 	sdn sync.Mutex
@@ -809,6 +816,13 @@ func (s *Service) audit(ctx context.Context, action, name string, detail map[str
 	if err := s.Store.Audit(ctx, AuditEntry{Actor: actorFrom(ctx), Action: action, Tenant: name, Detail: detail}); err != nil {
 		s.logger().Error("writing audit log", "tenant", name, "action", action, "err", err)
 	}
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func (s *Service) logger() *slog.Logger {

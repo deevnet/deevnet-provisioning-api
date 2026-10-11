@@ -35,6 +35,12 @@ type Config struct {
 
 	KVMount    string // deevnet-api
 	TransitKey string // tenant-secrets
+
+	// ServiceMount and ServiceRole are the Tenant Service CA's PKI mount and
+	// the one role the API may sign on (ADR-0037). Optional: without a mount
+	// the client signs nothing.
+	ServiceMount string // pki-tenant-service
+	ServiceRole  string // tenant-service
 }
 
 // Client logs in with its AppRole on first use and again when its token
@@ -199,6 +205,52 @@ func (c *Client) Wrap(ctx context.Context, data map[string]string, ttl time.Dura
 		return "", time.Time{}, errors.New("openbao: wrap returned no token")
 	}
 	return out.WrapInfo.Token, out.WrapInfo.CreationTime.Add(time.Duration(out.WrapInfo.TTL) * time.Second), nil
+}
+
+// SignServer has the Tenant Service CA sign a request for a server
+// certificate valid for names, the first of them its common name (ADR-0037).
+//
+// The names are passed beside the request, not read from it. The role is set
+// to ignore the request's own subject and names, so what a tenant wrote in its
+// request cannot reach a certificate: only its key does. No lifetime is asked
+// for either. The role's is the only one there is.
+//
+// What comes back is returned as it came. Checking it against what was asked
+// is the caller's, which knows what was asked.
+func (c *Client) SignServer(ctx context.Context, csrPEM string, names []string) (tenant.SignedCertificate, error) {
+	if c.cfg.ServiceMount == "" || c.cfg.ServiceRole == "" {
+		return tenant.SignedCertificate{}, errors.New("openbao: no Tenant Service CA is configured")
+	}
+	if len(names) == 0 {
+		return tenant.SignedCertificate{}, errors.New("openbao: a certificate needs a name")
+	}
+	in := map[string]any{
+		"csr":         csrPEM,
+		"common_name": names[0],
+		"format":      "pem",
+	}
+	if len(names) > 1 {
+		in["alt_names"] = strings.Join(names[1:], ",")
+	}
+	var out struct {
+		Data struct {
+			Certificate string   `json:"certificate"`
+			IssuingCA   string   `json:"issuing_ca"`
+			CAChain     []string `json:"ca_chain"`
+		} `json:"data"`
+	}
+	path := "/v1/" + c.cfg.ServiceMount + "/sign/" + c.cfg.ServiceRole
+	if err := c.do(ctx, http.MethodPost, path, in, &out); err != nil {
+		return tenant.SignedCertificate{}, fmt.Errorf("openbao: sign: %w", err)
+	}
+	if out.Data.Certificate == "" {
+		return tenant.SignedCertificate{}, errors.New("openbao: sign returned no certificate")
+	}
+	chain := out.Data.CAChain
+	if len(chain) == 0 && out.Data.IssuingCA != "" {
+		chain = []string{out.Data.IssuingCA}
+	}
+	return tenant.SignedCertificate{Certificate: out.Data.Certificate, Chain: chain}, nil
 }
 
 // ErrNotRedeemable is a wrapping token that was already spent, expired, or

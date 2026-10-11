@@ -27,6 +27,7 @@ type Store struct {
 	devices       map[string]tenant.Device
 	addresses     map[string]tenant.DeviceAddress
 	brokerAccts   map[string]tenant.BrokerAccount
+	certificates  map[string]tenant.Certificate
 	extraRecords  map[string]tenant.ExtraRecord
 	AuditLog      []tenant.AuditEntry
 }
@@ -122,6 +123,14 @@ func (s *Store) Delete(_ context.Context, name string) error {
 		return tenant.ErrNotFound
 	}
 	delete(s.records, name)
+	// The registry does this with a foreign key (0010_certificates.sql):
+	// nothing else removes a certificate's row, because there is no backend
+	// to tell first.
+	for key, c := range s.certificates {
+		if c.Tenant == name {
+			delete(s.certificates, key)
+		}
+	}
 	return nil
 }
 
@@ -530,6 +539,56 @@ func (s *Store) DeleteBrokerAccount(_ context.Context, tenantName, name string) 
 	return nil
 }
 
+func (s *Store) PutCertificate(_ context.Context, c tenant.Certificate) (tenant.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[c.Tenant]; !ok {
+		return tenant.Certificate{}, tenant.ErrNotFound
+	}
+	if s.certificates == nil {
+		s.certificates = map[string]tenant.Certificate{}
+	}
+	key := c.Tenant + "/" + c.Name
+	if old, ok := s.certificates[key]; ok {
+		c.CreatedAt = old.CreatedAt
+	} else {
+		c.CreatedAt = time.Now()
+	}
+	c.UpdatedAt = time.Now()
+	s.certificates[key] = c
+	return c, nil
+}
+
+func (s *Store) GetCertificate(_ context.Context, tenantName, name string) (tenant.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.certificates[tenantName+"/"+name]
+	if !ok {
+		return tenant.Certificate{}, tenant.ErrNotFound
+	}
+	return c, nil
+}
+
+func (s *Store) ListCertificates(_ context.Context, tenantName string) ([]tenant.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.Certificate
+	for _, c := range s.certificates {
+		if c.Tenant == tenantName {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Store) DeleteCertificate(_ context.Context, tenantName, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.certificates, tenantName+"/"+name)
+	return nil
+}
+
 func (s *Store) PutRecord(_ context.Context, r tenant.ExtraRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -608,6 +667,10 @@ type Backends struct {
 	Foreign         map[string]bool
 	FailReservation error
 
+	// Signer is the Tenant Service CA: a real hierarchy that really signs
+	// (ADR-0037). Its own fields make it fail or misbehave.
+	Signer *Signer
+
 	FailDNS, FailResolver, FailState, FailFabric error
 	FailNetwork, FailCompute, FailWireless       error
 }
@@ -627,6 +690,7 @@ func NewBackends() *Backends {
 		LogTenants:     map[string]tenant.LogTenant{},
 		DashTenants:    map[string]tenant.DashTenant{},
 		DashOrgs:       map[string]int{},
+		Signer:         NewSigner(),
 	}
 }
 
@@ -1015,6 +1079,7 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		BrokerWriter: b.BrokerWriter(),
 		LogWriter:    b.LogWriter(),
 		Dashboards:   b.Dashboards(),
+		Signer:       b.Signer,
 		Tokens:       tokens,
 		Enroller:     &Enroller{},
 	}, st, b

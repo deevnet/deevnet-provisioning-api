@@ -10,7 +10,7 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 being up.
 
 It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry,
-their devices' fixed addresses, their MQTT broker accounts, their log store tokens and their Grafana organisation (`api/openapi.yaml`, published at
+their devices' fixed addresses, their MQTT broker accounts, their log store tokens, their Grafana organisation and server certificates for their own services (`api/openapi.yaml`, published at
 https://deevnet.github.io/deevnet-provisioning-api/).
 
 The repository name says what the service is for; the service itself, its binary, image and
@@ -57,6 +57,12 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
 - **Tenant tokens verify without the registry.** `dvt1.<tenant>.<nonce>.<mac>`, keyed by
   `token_hmac_key` in OpenBao, so a tenant can restore itself after the database is lost. The
   registry's hash revokes. Don't replace them with random opaque tokens.
+- **A certificate names only what is in the caller's zone, and takes only a key from a request**
+  (ADR-0037). A tenant sends labels; `internal/tenant/certificates.go` appends the zone. The
+  request's subject, names and extensions are never used. What the signer returns is checked
+  against what was asked before it is stored or returned, and a certificate that says more is a
+  failed step, not a result. Don't add a field that lets a caller name a zone, a lifetime or a
+  usage. The private key never comes to the API, so nothing about a certificate is a secret.
 - **Allocation reads the fabric.** An index is free only if no registry row holds it and no SDN
   zone or VNet carries its numbers. Don't shortcut to the database alone.
 - **A workload's identity is derived, never allocated by hand** (ADR-0015 §12): ordinal from the

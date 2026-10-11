@@ -150,6 +150,8 @@ var wireSchemas = map[string]any{
 	"WifiKey":              wifiKeyView{},
 	"BrokerAccountRequest": brokerAccountBody{},
 	"BrokerAccount":        brokerAccountView{},
+	"CertificateRequest":   certificateBody{},
+	"Certificate":          certificateView{},
 	"EgressVRF":            tenant.EgressVRF{},
 }
 

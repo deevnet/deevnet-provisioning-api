@@ -16,7 +16,7 @@ service routes, `/healthz`, `/readyz` and `/version`, take no token.
 | Token | What it is | May |
 |---|---|---|
 | **Operator** | the site's operator token | everything |
-| **Tenant** | `dvt1.<tenant>.<nonce>.<mac>`, returned when the tenant is created | read and delete its own tenant, restore itself, and manage its own workloads, names, devices, keys and accounts |
+| **Tenant** | `dvt1.<tenant>.<nonce>.<mac>`, returned when the tenant is created | read and delete its own tenant, restore itself, and manage its own workloads, names, devices, keys, accounts and certificates |
 | **Enrollment** | single-use, issued by an admission | create the one tenant it was issued for, once |
 | **Egress agent** | the exit node's token | read `GET /v1/fabric/egress`, nothing else |
 

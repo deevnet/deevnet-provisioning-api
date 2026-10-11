@@ -29,6 +29,7 @@ accounts, log store tokens and dashboard login, each where the site runs the ser
 | [Authentication](https://deevnet.github.io/deevnet-provisioning-api/docs/authentication/) | the four kinds of token and what each may call |
 | [Tenant Lifecycle](https://deevnet.github.io/deevnet-provisioning-api/docs/tenant-lifecycle/) | admit, create, restore, resume, reconcile, delete |
 | [Device Services](https://deevnet.github.io/deevnet-provisioning-api/docs/device-services/) | registry, fixed addresses, Wi-Fi keys, broker accounts |
+| [Service Certificates](https://deevnet.github.io/deevnet-provisioning-api/docs/service-certificates/) | a server certificate for a tenant's own service, for a name in its own zone |
 | [Conventions](https://deevnet.github.io/deevnet-provisioning-api/docs/conventions/) | ensures, partial objects, where secrets appear, errors |
 | [Configuration](https://deevnet.github.io/deevnet-provisioning-api/docs/configuration/) | every environment variable the service reads |
 | [Release Notes](https://deevnet.github.io/deevnet-provisioning-api/docs/release-notes/) | what changed in each version; the source is `CHANGELOG.md` |

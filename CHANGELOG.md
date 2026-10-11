@@ -10,10 +10,24 @@ One tag covers everything this repository builds: the API, the two writers
 
 ### Added
 
+- **Server certificates for tenants' own services** (ADR-0037, CHG-0047):
+  `PUT`, `GET` and `DELETE /v1/tenants/{name}/certificates/{certificate}`, and `GET` of the list.
+  A tenant sends a signing request for a label in its own zone; the site's Tenant Service CA, in
+  OpenBao, signs a one-year server certificate, and it comes back with the chain a server
+  presents. The request is read for its public key alone. Asking again returns the same
+  certificate until sixty days before it expires. Nothing is revoked, and nothing renews by
+  itself.
 - A documentation site, https://deevnet.github.io/deevnet-provisioning-api/, with the API
   reference rendered from `api/openapi.yaml`.
 - `api/openapi.yaml`, an OpenAPI 3.1 specification, as the contract. It replaces
   `docs/api-v1.md`, and tests fail when it and the code disagree on a route or a wire field.
+
+### Upgrading
+
+- Certificates are off until `OPENBAO_TENANT_SERVICE_MOUNT` names the Tenant Service CA's mount.
+  A site without one needs to change nothing. A site with one adds the variable, and `update` on
+  `<mount>/sign/tenant-service` to the service's OpenBao policy.
+- The database gains a table, `tenant_certificates`, by migration `0010`. It runs at start.
 
 ## 0.10.0 (2026-10-06)
 
