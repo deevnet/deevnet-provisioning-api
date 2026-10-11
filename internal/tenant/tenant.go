@@ -33,6 +33,10 @@ const (
 	StepAddress   = "device-address"
 	StepLogStore  = "log-store"
 	StepDashboard = "dashboards"
+	// StepCertificate is not one of a tenant's create steps: it is the signer
+	// failing, or answering with something that was not asked for, when a
+	// tenant asks for a certificate (ADR-0037).
+	StepCertificate = "certificate"
 )
 
 // LogTenant is one tenant's users in the log store. The partitions are not in
@@ -326,6 +330,13 @@ type Store interface {
 	ListClassAddresses(ctx context.Context, trustClass string) ([]DeviceAddress, error)
 	SetDeviceAddressStatus(ctx context.Context, tenantName, device string, status Status) error
 	DeleteDeviceAddress(ctx context.Context, tenantName, device string) error
+
+	// Server certificates (ADR-0037). Nothing is allocated and nothing is
+	// sealed: a certificate is public, and its key was never here.
+	PutCertificate(ctx context.Context, c Certificate) (Certificate, error)
+	GetCertificate(ctx context.Context, tenantName, name string) (Certificate, error)
+	ListCertificates(ctx context.Context, tenantName string) ([]Certificate, error)
+	DeleteCertificate(ctx context.Context, tenantName, name string) error
 
 	// Extra records (ADR-0015 §13).
 	PutRecord(ctx context.Context, r ExtraRecord) error

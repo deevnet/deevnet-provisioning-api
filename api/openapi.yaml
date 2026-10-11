@@ -56,6 +56,10 @@ tags:
     description: A tenant's pre-shared key for one trust class. One key serves every device flashed with it.
   - name: Broker accounts
     description: A tenant's MQTT account on the platform broker, one per thing that connects.
+  - name: Certificates
+    description: |
+      Server certificates for a tenant's own services, for names in its own zone. The tenant
+      makes the key; the site's Tenant Service CA signs.
   - name: Fabric
     description: What the exit node's agent reads.
 
@@ -978,6 +982,122 @@ paths:
         "502": { $ref: "#/components/responses/StepFailed" }
         "503": { $ref: "#/components/responses/NotMigrated" }
 
+  /v1/tenants/{name}/certificates:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    get:
+      tags: [Certificates]
+      operationId: listCertificates
+      summary: List a tenant's certificates
+      description: "**Callers:** operator, or the tenant itself. Everything in a certificate is public."
+      responses:
+        "200":
+          description: The certificates, one per name, each the one current for it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [certificates]
+                properties:
+                  certificates:
+                    type: array
+                    items: { $ref: "#/components/schemas/Certificate" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/certificates/{certificate}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - name: certificate
+        in: path
+        required: true
+        description: |
+          The certificate's name: one DNS label in the tenant's zone, such as `console`. It is
+          what the certificate is for, and its common name once the zone is appended.
+        schema: { type: string, pattern: "^[a-z][a-z0-9-]{0,19}$" }
+    put:
+      tags: [Certificates]
+      operationId: putCertificate
+      summary: Issue a certificate, or return the one issued
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The tenant makes a private key and keeps it, and sends a signing request made with it.
+        The site's Tenant Service CA signs a server certificate for
+        `<certificate>.<tenant>.<site>.deevnet.net`, valid for one year, and it comes back with
+        the chain a server presents after it.
+
+        **The request is read for its public key and nothing else.** Its subject, its names and
+        its extensions are not used. The certificate's subject, names, usages and lifetime are
+        the issuer's, the same for every tenant. The request must be signed by its own key, which
+        must be RSA of 2048 bits or more, or ECDSA P-256.
+
+        **A tenant sends labels, never names.** `names` adds further labels in the same zone;
+        the API appends the zone to each. A dot, a wildcard, an address or a name outside the
+        tenant's zone is a `400`. A label does not have to be published first.
+
+        **Asking again is an ensure.** The same key and the same names return the same
+        certificate, with `200`, while more than sixty days remain before it expires. A new key,
+        a changed name, or less time than that, issues another, with `201`. Nothing renews a
+        certificate for a tenant that does not ask.
+
+        **A certificate cannot be withdrawn.** Reissuing or deleting one does not revoke the one
+        before it, which stays valid until it expires wherever its key still is.
+
+        At a site with no Tenant Service CA these routes refuse with a reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CertificateRequest" }
+            example:
+              csr: "-----BEGIN CERTIFICATE REQUEST-----\nMIH...\n-----END CERTIFICATE REQUEST-----\n"
+              names: [www]
+      responses:
+        "200":
+          description: The certificate already issued for this key and these names.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "201":
+          description: A certificate issued by this call.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Certificates]
+      operationId: getCertificate
+      summary: Read a certificate
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The certificate current for this name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Certificates]
+      operationId: deleteCertificate
+      summary: Forget a certificate
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The API forgets the certificate. **It is not revoked:** whoever holds its key can serve
+        with it until it expires. A tenant that has lost a key gains nothing from this.
+      responses:
+        "204": { description: Forgotten. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+
   /v1/fabric/egress:
     get:
       tags: [Fabric]
@@ -1459,6 +1579,47 @@ components:
         password: { type: string, description: "Only when this call minted or was given one, never a read." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    CertificateRequest:
+      type: object
+      additionalProperties: false
+      required: [csr]
+      properties:
+        csr:
+          type: string
+          description: |
+            A PEM PKCS#10 signing request, signed by its own key. Read for its public key alone.
+        names:
+          type: array
+          maxItems: 7
+          items: { type: string, pattern: "^[a-z][a-z0-9-]{0,19}$" }
+          description: Further labels in the tenant's zone, beside the certificate's own.
+    Certificate:
+      type: object
+      required: [tenant, name, fqdn, names, certificate, ca_chain, serial, key_fingerprint, not_before, not_after, renew_after, created_at, updated_at]
+      properties:
+        tenant: { type: string }
+        name: { type: string }
+        fqdn: { type: string, description: "The certificate's own name and its common name: `<name>.<tenant>.<site>.deevnet.net`." }
+        names:
+          type: array
+          items: { type: string }
+          description: Every DNS name it is valid for, fully qualified, its own first.
+        certificate: { type: string, description: "The leaf, PEM." }
+        ca_chain:
+          type: string
+          description: |
+            What a server presents after the leaf, PEM: the Tenant Service CA, then the Site CA.
+            Never the root, which a client holds.
+        serial: { type: string, description: "Hex pairs, colon separated." }
+        key_fingerprint: { type: string, description: "SHA-256 of the public key it certifies, in hex." }
+        not_before: { type: string, format: date-time }
+        not_after: { type: string, format: date-time }
+        renew_after:
+          type: string
+          format: date-time
+          description: When asking again issues a new certificate; sixty days before `not_after`.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, description: "When the certificate now current was issued." }
     EgressVRF:
       type: object
       required: [tenant, vrf]

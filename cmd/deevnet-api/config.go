@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strconv"
@@ -169,6 +170,10 @@ var openbaoEnv = []string{
 //	OPENBAO_KV_MOUNT       "deevnet-api"
 //	OPENBAO_KV_PATH        "backends"
 //	OPENBAO_TRANSIT_KEY    "tenant-secrets"
+//	OPENBAO_TENANT_SERVICE_MOUNT unset: the site has no Tenant Service CA, and
+//	                             the API issues no certificates (ADR-0037).
+//	                             Set, it is the CA's PKI mount: pki-tenant-service
+//	OPENBAO_TENANT_SERVICE_ROLE  "tenant-service": the one role the API signs on
 //	DEEVNET_ENROLLMENT_TTL "72h"
 //	OPNSENSE_INSECURE_TLS  "false": the router serves a site certificate (ADR-0030)
 //	PROXMOX_INSECURE_TLS   "false": so does the node
@@ -223,6 +228,9 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			SecretID:   getenv("OPENBAO_SECRET_ID"),
 			KVMount:    orDefault(getenv("OPENBAO_KV_MOUNT"), "deevnet-api"),
 			TransitKey: orDefault(getenv("OPENBAO_TRANSIT_KEY"), "tenant-secrets"),
+
+			ServiceMount: getenv("OPENBAO_TENANT_SERVICE_MOUNT"),
+			ServiceRole:  orDefault(getenv("OPENBAO_TENANT_SERVICE_ROLE"), "tenant-service"),
 		})
 		if err != nil {
 			return wiring{}, err
@@ -406,6 +414,15 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	// compare equal to nil.
 	if enroller != nil {
 		svc.Enroller = enroller
+	}
+	// The Tenant Service CA lives in OpenBao, so there is no signer without
+	// it. Left nil without a mount, and the certificate routes refuse with a
+	// reason: a site with no such CA is a legitimate site (ADR-0037).
+	switch mount := getenv("OPENBAO_TENANT_SERVICE_MOUNT"); {
+	case mount != "" && bao == nil:
+		return wiring{}, errors.New("OPENBAO_TENANT_SERVICE_MOUNT is set, but OPENBAO_ADDR is not: the Tenant Service CA is in OpenBao")
+	case mount != "":
+		svc.Signer = bao
 	}
 	// Left nil without a range, so the address routes refuse with a reason.
 	if len(site.AddressRanges) > 0 {

@@ -461,3 +461,26 @@ func TestAddressRangeMisconfigured(t *testing.T) {
 		})
 	}
 }
+
+// A site with no Tenant Service CA is a legitimate site - it is every site
+// before CHG-0047 - and must still start, with nothing to sign with.
+func TestNoTenantServiceCAStillStarts(t *testing.T) {
+	w, err := tenantService(context.Background(), env(fullEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Signer != nil {
+		t.Error("no OPENBAO_TENANT_SERVICE_MOUNT should mean no signer")
+	}
+}
+
+// The CA is in OpenBao. Naming its mount with no OpenBao to find it in is a
+// mistake to stop for at startup, not a certificate route that fails later.
+func TestTenantServiceCANeedsOpenBao(t *testing.T) {
+	e := fullEnv()
+	e["OPENBAO_TENANT_SERVICE_MOUNT"] = "pki-tenant-service"
+	_, err := tenantService(context.Background(), env(e))
+	if err == nil || !strings.Contains(err.Error(), "OPENBAO_TENANT_SERVICE_MOUNT") || !strings.Contains(err.Error(), "OPENBAO_ADDR") {
+		t.Fatalf("err = %v", err)
+	}
+}

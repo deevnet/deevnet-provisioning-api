@@ -27,6 +27,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	deviceRoutes(mux, h)
 	addressRoutes(mux, h)
 	brokerAccountRoutes(mux, h)
+	certificateRoutes(mux, h)
 }
 
 // ownTenant admits the operator, and a registered tenant for its own name. A

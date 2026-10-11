@@ -48,6 +48,6 @@ enableGitInfo = true
 
 [[cascade]]
   title = "Release Notes"
-  weight = 7
+  weight = 8
   [cascade._target]
     path = "/docs/release-notes"

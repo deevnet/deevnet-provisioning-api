@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Postgres {
 	}
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_records, tenants, schema_migrations CASCADE`,
+		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, tenants, schema_migrations CASCADE`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatal(err)

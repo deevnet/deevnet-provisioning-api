@@ -38,6 +38,10 @@ Most callers never speak to it directly. A tenant declares what it wants in Terr
 <h3>Device Services</h3>
 <p>Registry, fixed addresses, Wi-Fi keys and broker accounts.</p>
 </a>
+<a class="section-card" href="docs/service-certificates/">
+<h3>Service Certificates</h3>
+<p>A server certificate for a tenant's own service, for a name in its own zone.</p>
+</a>
 <a class="section-card" href="docs/conventions/">
 <h3>Conventions</h3>
 <p>Ensures, partial objects, where secrets appear, and errors.</p>

@@ -1,6 +1,6 @@
 ---
 title: "Conventions"
-weight: 5
+weight: 6
 ---
 
 # Conventions
@@ -65,7 +65,7 @@ rather than being ignored. A body is capped at 64 KB, and an admission's at 4 KB
 ## Optional capabilities
 
 **A site may serve only part of the API.** Wi-Fi keys, fixed addresses, broker accounts, the log
-store and dashboards each depend on a service the site may not run. Their routes then refuse with
+store, dashboards and service certificates each depend on a service the site may not run. Their routes then refuse with
 a reason, and a tenant's answer simply omits what the site does not have. A site with no wireless
 controller or no broker is a legitimate site.
 
