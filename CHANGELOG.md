@@ -6,7 +6,7 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
-## Unreleased
+## 0.11.0 (2026-10-11)
 
 ### Added
 
