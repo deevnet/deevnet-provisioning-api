@@ -78,6 +78,11 @@ func (k *kit) issueServerCert() error {
 		return err
 	}
 	dns, ips := serverNames(h)
+	extra, err := k.readNames()
+	if err != nil {
+		return err
+	}
+	dns, ips = withNames(dns, ips, extra)
 	tmpl := &x509.Certificate{
 		SerialNumber: serial(),
 		Subject:      pkix.Name{CommonName: h + ".local"},
@@ -169,8 +174,9 @@ func (k *kit) cmdRegenCerts() error {
 	if k.noExec {
 		return nil
 	}
-	// Neither service re-reads its certificate on reload.
-	return runCmd(append([]string{"systemctl", "restart"}, "mosquitto", "vmauth")...)
+	// None of them re-reads its certificate on reload. Grafana presents it on
+	// 3000 too, and was left serving the old one until it was restarted.
+	return runCmd(append([]string{"systemctl", "restart"}, "mosquitto", "vmauth", "grafana")...)
 }
 
 func (k *kit) loadCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {

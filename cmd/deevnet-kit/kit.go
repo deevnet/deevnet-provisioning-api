@@ -139,6 +139,11 @@ func (k *kit) cmdInit(args []string) error {
 	if err := k.issueCA(); err != nil {
 		return err
 	}
+	if len(bc.Names) > 0 {
+		if err := k.writeNames(bc.Names); err != nil {
+			return err
+		}
+	}
 	if err := k.issueServerCert(); err != nil {
 		return err
 	}
@@ -163,6 +168,10 @@ type bootSettings struct {
 	// Wi-Fi, when WiFiSSID is set. The country is required with it: Raspberry
 	// Pi OS keeps the radio blocked until one is set.
 	WiFiSSID, WiFiPSK, WiFiCountry string
+	// Names are extra names and addresses for the server certificate: a
+	// site's DNS names for the Pi, or the address it will have on a network
+	// it has not joined yet.
+	Names []string
 }
 
 // readBootConfig reads key=value lines. A missing file is not an error: the
@@ -207,6 +216,10 @@ func readBootConfig(path string) (bootSettings, error) {
 			bc.WiFiPSK = val
 		case "wifi_country":
 			bc.WiFiCountry = strings.ToUpper(val)
+		case "names":
+			if bc.Names, err = parseNames(val); err != nil {
+				return bootSettings{}, fmt.Errorf("%s: names: %w", path, err)
+			}
 		default:
 			return bootSettings{}, fmt.Errorf("%s: unknown key %q", path, key)
 		}
