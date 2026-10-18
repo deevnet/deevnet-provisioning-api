@@ -46,7 +46,10 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
                                        [--password-file FILE | --password PW]
   deevnet-kit account list
   deevnet-kit account rm NAME
-  deevnet-kit regen-certs              reissue the server certificate for this hostname
+  deevnet-kit names [list | set N... | add N... | rm N...]
+                                       extra names and addresses for the server certificate
+  deevnet-kit regen-certs              reissue the server certificate for this hostname and
+                                       those names
   deevnet-kit render                   rewrite the broker and log store config from state
   deevnet-kit dashboards               ensure the tenant's Grafana organisation (each boot)
   deevnet-kit selftest                 prove the card end to end: TLS, a device log over
@@ -83,6 +86,8 @@ func run(args []string) error {
 		return k.cmdExport(args[1:])
 	case "account":
 		return k.cmdAccount(args[1:])
+	case "names":
+		return k.cmdNames(args[1:])
 	case "regen-certs":
 		return k.cmdRegenCerts()
 	case "render":
