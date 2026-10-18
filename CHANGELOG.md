@@ -6,6 +6,26 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## 0.12.0 (2026-10-18)
+
+### Added
+
+- **Extra names and addresses on a Pi's server certificate** (`deevnet-kit`, CHG-0050). A Pi
+  with names in a site's DNS, or about to move to a network where it will have another address,
+  can have its certificate carry them first. `names=` in `deevnet-kit.txt` sets them on first
+  boot; `deevnet-kit names [list | set | add | rm]` changes them later, and `regen-certs`
+  applies them. They are kept in `/etc/deevnet-kit/names`, one a line. Wildcards are refused.
+
+### Changed
+
+- `deevnet-kit regen-certs` restarts Grafana as well as the broker and vmauth. Grafana presents
+  the same certificate on 3000 and kept the old one until it was restarted.
+
+### Upgrading
+
+- Nothing changes for a card that sets no names. A card initialized on 0.11.0 or earlier can be
+  given names with `deevnet-kit names set` and `regen-certs`; no reflash.
+
 ## 0.11.0 (2026-10-11)
 
 ### Added
