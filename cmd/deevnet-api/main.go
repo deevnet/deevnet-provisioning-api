@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -37,6 +38,17 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+
+	// `deevnet-api reseal` moves every stored secret to the current Transit
+	// key and exits (CHG-0036). It runs in the API's own container, with its
+	// environment: podman exec deevnet-api /usr/local/bin/deevnet-api reseal
+	if len(os.Args) > 1 && os.Args[1] == "reseal" {
+		if err := reseal(logger); err != nil {
+			logger.Error("reseal", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := run(logger); err != nil {
 		logger.Error("exiting", "err", err)
@@ -201,4 +213,39 @@ func run(logger *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// reseal needs only the database and OpenBao. It prints its report and fails
+// if any value opened under neither key, so the previous key is not retired
+// while something still needs it.
+func reseal(logger *slog.Logger) error {
+	bao, err := openbaoClient(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if bao == nil {
+		return errors.New("OPENBAO_ADDR is empty: nothing is sealed")
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		return errors.New("DATABASE_URL is empty")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL: %w", err)
+	}
+	defer pool.Close()
+
+	rep, err := store.New(pool).WithLogger(logger).Reseal(ctx, bao)
+	out, _ := json.Marshal(rep)
+	fmt.Println(string(out))
+	if err != nil {
+		return err
+	}
+	if len(rep.Failed) > 0 {
+		return errors.New("some stored values open under neither key; keep the previous key until they are supplied again")
+	}
+	return nil
 }

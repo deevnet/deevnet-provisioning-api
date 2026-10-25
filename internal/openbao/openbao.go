@@ -34,7 +34,11 @@ type Config struct {
 	SecretID string
 
 	KVMount    string // deevnet-api
-	TransitKey string // tenant-secrets
+	TransitKey string // tenant-secrets-v2
+	// TransitKeyPrevious is the key being replaced, while stored values are
+	// resealed (CHG-0036): Open falls back to it when the current key refuses
+	// a ciphertext, and Reseal moves a value from it. Empty when there is none.
+	TransitKeyPrevious string
 
 	// ServiceMount and ServiceRole are the Tenant Service CA's PKI mount and
 	// the one role the API may sign on (ADR-0037). Optional: without a mount
@@ -168,17 +172,35 @@ func (c *Client) Seal(ctx context.Context, plaintext string) (string, error) {
 
 // Open decrypts a Transit ciphertext. A value without the ciphertext prefix is
 // returned unchanged: it was stored before encryption was on, and is sealed
-// the next time it is written.
+// the next time it is written. While a previous key is configured, a
+// ciphertext the current key refuses is tried with it.
 func (c *Client) Open(ctx context.Context, stored string) (string, error) {
+	out, _, err := c.open(ctx, stored)
+	return out, err
+}
+
+// open also says whether the previous key opened it.
+func (c *Client) open(ctx context.Context, stored string) (string, bool, error) {
 	if !strings.HasPrefix(stored, CiphertextPrefix) {
-		return stored, nil
+		return stored, false, nil
 	}
+	out, err := c.decrypt(ctx, c.cfg.TransitKey, stored)
+	if err == nil || c.cfg.TransitKeyPrevious == "" || errors.Is(err, ErrUnavailable) {
+		return out, false, err
+	}
+	if prev, perr := c.decrypt(ctx, c.cfg.TransitKeyPrevious, stored); perr == nil {
+		return prev, true, nil
+	}
+	return "", false, err
+}
+
+func (c *Client) decrypt(ctx context.Context, key, stored string) (string, error) {
 	var out struct {
 		Data struct {
 			Plaintext string `json:"plaintext"`
 		} `json:"data"`
 	}
-	if err := c.do(ctx, http.MethodPost, "/v1/transit/decrypt/"+c.cfg.TransitKey, map[string]string{"ciphertext": stored}, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/v1/transit/decrypt/"+key, map[string]string{"ciphertext": stored}, &out); err != nil {
 		return "", fmt.Errorf("openbao: decrypt: %w", err)
 	}
 	raw, err := base64.StdEncoding.DecodeString(out.Data.Plaintext)
@@ -186,6 +208,32 @@ func (c *Client) Open(ctx context.Context, stored string) (string, error) {
 		return "", fmt.Errorf("openbao: decrypt: %w", err)
 	}
 	return string(raw), nil
+}
+
+// Reseal returns stored sealed under the current key, and whether that
+// changed it: a value under the previous key, or stored before encryption was
+// on. A value the current key opens is returned as it is. One neither key
+// opens is an error, and is left for the caller to keep.
+func (c *Client) Reseal(ctx context.Context, stored string) (string, bool, error) {
+	if stored == "" {
+		return stored, false, nil
+	}
+	if strings.HasPrefix(stored, CiphertextPrefix) {
+		if _, err := c.decrypt(ctx, c.cfg.TransitKey, stored); err == nil {
+			return stored, false, nil
+		} else if errors.Is(err, ErrUnavailable) {
+			return "", false, err
+		}
+	}
+	plain, _, err := c.open(ctx, stored)
+	if err != nil {
+		return "", false, err
+	}
+	sealed, err := c.Seal(ctx, plain)
+	if err != nil {
+		return "", false, err
+	}
+	return sealed, true, nil
 }
 
 // Wrap puts data in the cubbyhole of a single-use token that lives for ttl, and

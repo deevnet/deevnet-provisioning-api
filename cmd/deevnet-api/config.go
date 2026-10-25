@@ -217,6 +217,8 @@ func openbaoClient(getenv func(string) string) (*openbao.Client, error) {
 		SecretID:   getenv("OPENBAO_SECRET_ID"),
 		KVMount:    orDefault(getenv("OPENBAO_KV_MOUNT"), "deevnet-api"),
 		TransitKey: orDefault(getenv("OPENBAO_TRANSIT_KEY"), "tenant-secrets"),
+		// Set only while stored values move to a new key (CHG-0036).
+		TransitKeyPrevious: getenv("OPENBAO_TRANSIT_KEY_PREVIOUS"),
 
 		ServiceMount: getenv("OPENBAO_TENANT_SERVICE_MOUNT"),
 		ServiceRole:  orDefault(getenv("OPENBAO_TENANT_SERVICE_ROLE"), "tenant-service"),
