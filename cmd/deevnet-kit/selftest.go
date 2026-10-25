@@ -64,9 +64,9 @@ func (k *kit) cmdSelftest() error {
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(ca)
 	hc := &http.Client{Timeout: 15 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}}}
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
 	marker := "selftest-" + mustHex(6)
-	logBase := fmt.Sprintf("https://localhost:%d", logPort)
+	logBase := fmt.Sprintf("https://%s:%d", st.name("logs"), logPort)
 
 	var checks []check
 	for _, u := range units {
@@ -80,13 +80,13 @@ func (k *kit) cmdSelftest() error {
 		}})
 	}
 	for _, p := range []struct {
-		what string
-		port int
-	}{{"broker", brokerPort}, {"log store", logPort}, {"grafana", dashboardPort}} {
+		what, svc string
+		port      int
+	}{{"broker", "mqtt", brokerPort}, {"log store", "logs", logPort}, {"grafana", "grafana", dashboardPort}} {
 		p := p
 		checks = append(checks, check{fmt.Sprintf("TLS %s :%d", p.what, p.port), func() error {
 			c, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp",
-				fmt.Sprintf("127.0.0.1:%d", p.port), &tls.Config{RootCAs: pool, ServerName: "localhost"})
+				fmt.Sprintf("127.0.0.1:%d", p.port), &tls.Config{RootCAs: pool, ServerName: st.name(p.svc)})
 			if err != nil {
 				return err
 			}
@@ -221,7 +221,7 @@ func (k *kit) selftestDeviceLog(st state, hc *http.Client, logBase, marker strin
 	// Mosquitto reloads its password file on the signal the account write
 	// sends, which takes a moment: a publish straight after can be refused.
 	for i := 0; i < 5; i++ {
-		out, err := exec.Command("mosquitto_pub", "-h", "localhost", "-p", fmt.Sprint(brokerPort),
+		out, err := exec.Command("mosquitto_pub", "-h", st.name("mqtt"), "-p", fmt.Sprint(brokerPort),
 			"--cafile", k.caFile(), "-u", username(st, selftestAccount), "-P", pw,
 			"-i", "deevnet-kit-selftest", "-q", "1", "-t", topic, "-m", msg).CombinedOutput()
 		if err == nil {
@@ -283,7 +283,7 @@ func grafanaCall(hc *http.Client, st state, method, path string, in, out any) er
 		b, _ := json.Marshal(in)
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(context.Background(), method, dashboardURL("localhost")+path, body)
+	req, err := http.NewRequestWithContext(context.Background(), method, dashboardURL(st.name("grafana"))+path, body)
 	if err != nil {
 		return err
 	}

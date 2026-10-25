@@ -21,8 +21,10 @@
 //     separates tenants from each other, because there is only one.
 //   - There is no device registry. A device account names its device, and the
 //     name is checked for shape only.
-//   - The CA is the card's own, generated on first boot. Nothing Deevnet holds
-//     can reach this Pi, and nothing on it was issued by Deevnet.
+//   - The CA is the card's own, generated on first boot, until a Deevnet
+//     certificate is installed (cert install, ADR-0041 §2). A Deevnet Pi's
+//     certificate is the Tenant Service CA's, for the tenant's site-less
+//     names, and it trusts the Deevnet Root.
 //   - Grafana's organisation is written by the same package the API uses
 //     (internal/backend/grafana), so its data sources have the same UIDs and a
 //     dashboard moves unchanged. The Pi's owner also holds the admin login.
@@ -49,7 +51,12 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
   deevnet-kit names [list | set N... | add N... | rm N...]
                                        extra names and addresses for the server certificate
   deevnet-kit regen-certs              reissue the server certificate for this hostname and
-                                       those names
+                                       those names, from the card's own CA
+  deevnet-kit cert request             a Deevnet Pi: a new key, and its signing request for the
+                                       Tenant Service CA
+  deevnet-kit cert install FULLCHAIN ROOT
+                                       install what the Tenant Service CA signed; from then on
+                                       everything here trusts the Deevnet Root
   deevnet-kit render                   rewrite the broker and log store config from state
   deevnet-kit dashboards               ensure the tenant's Grafana organisation (each boot)
   deevnet-kit selftest                 prove the card end to end: TLS, a device log over
@@ -88,6 +95,8 @@ func run(args []string) error {
 		return k.cmdAccount(args[1:])
 	case "names":
 		return k.cmdNames(args[1:])
+	case "cert":
+		return k.cmdCert(os.Stdout, args[1:])
 	case "regen-certs":
 		return k.cmdRegenCerts()
 	case "render":

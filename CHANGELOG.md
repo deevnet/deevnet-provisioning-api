@@ -8,6 +8,18 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+### Added
+
+- `sites` on a certificate request: the sites to name it at, among `DEEVNET_CERTIFICATE_SITES`.
+  Empty means this site alone.
+- **A Deevnet Pi** (`deevnet-kit`, CHG-0056, ADR-0041 §2). `deevnet-kit cert request` makes a new
+  key on the Pi and a signing request for the Tenant Service CA; `deevnet-kit cert install
+  FULLCHAIN ROOT` installs what comes back, after checking it is for that key, chains to the root
+  given, and names `mqtt`, `logs` and `grafana` under `<tenant>.deevnet.net`. From then on the
+  Pi's own services dial those names, mapped to loopback in `/etc/hosts`, and trust the Deevnet
+  Root; `kit.env` and `export` hand an app the names and `deevnet-root-ca.pem`. The card's own CA
+  is kept as `tls/card-ca.pem`.
+
 ### Changed
 
 - **A tenant's certificate names its service without a site, and its sites beside it**
@@ -18,11 +30,7 @@ One tag covers everything this repository builds: the API, the two writers
 - **Tenant names that are sites, the bus name or a global alias are refused** at create and
   admission: `home`, `mobile`, `mgmt`, `dvnt`, `dvntm`, `device`, `mqtt`, `artifacts`.
 - `device` is refused as a certificate label: it holds a tenant's device names.
-
-### Added
-
-- `sites` on a certificate request: the sites to name it at, among `DEEVNET_CERTIFICATE_SITES`.
-  Empty means this site alone.
+- `deevnet-kit regen-certs` refuses on a Deevnet Pi, where it would sign with the card's CA.
 
 ### Upgrading
 
@@ -30,6 +38,8 @@ One tag covers everything this repository builds: the API, the two writers
   Unset means this site alone.
 - The Tenant Service CA's signing role must allow names two labels under the root, not only
   under the site's zone: deevnet.mgmt sets it.
+- Nothing changes for a card until `cert install` runs. After it, re-export each app's `kit.env`:
+  its broker host and CA file change.
 
 ## 0.14.0 (2026-10-25)
 
