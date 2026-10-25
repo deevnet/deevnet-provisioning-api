@@ -1016,8 +1016,8 @@ paths:
         in: path
         required: true
         description: |
-          The certificate's name: one DNS label in the tenant's zone, such as `console`. It is
-          what the certificate is for, and its common name once the zone is appended.
+          The certificate's name: one DNS label, such as `console`. It is what the certificate is
+          for, and its common name is `<certificate>.<tenant>.deevnet.net`. `device` is reserved.
         schema: { type: string, pattern: "^[a-z][a-z0-9-]{0,19}$" }
     put:
       tags: [Certificates]
@@ -1027,9 +1027,14 @@ paths:
         **Callers:** operator, or the tenant itself.
 
         The tenant makes a private key and keeps it, and sends a signing request made with it.
-        The site's Tenant Service CA signs a server certificate for
-        `<certificate>.<tenant>.<site>.deevnet.net`, valid for one year, and it comes back with
+        The Tenant Service CA signs a server certificate, valid for one year, and it comes back with
         the chain a server presents after it.
+
+        **A service is named for its whole life, and its sites are extra names** (ADR-0040). The
+        common name and first name is `<certificate>.<tenant>.deevnet.net`; each further label
+        follows the same way; then each label again at each site in `sites`, as
+        `<label>.<tenant>.<site>.deevnet.net`. Without `sites`, the site is this one. A move to a
+        site already in a certificate needs no new one.
 
         **The request is read for its public key and nothing else.** Its subject, its names and
         its extensions are not used. The certificate's subject, names, usages and lifetime are
@@ -1602,14 +1607,20 @@ components:
           type: array
           maxItems: 7
           items: { type: string, pattern: "^[a-z][a-z0-9-]{0,19}$" }
-          description: Further labels in the tenant's zone, beside the certificate's own.
+          description: Further labels, beside the certificate's own. `device` is reserved.
+        sites:
+          type: array
+          items: { type: string }
+          description: |
+            The sites to name the certificate at, beside its site-less names, each one this API
+            issues for (`DEEVNET_CERTIFICATE_SITES`). Empty means this site alone.
     Certificate:
       type: object
       required: [tenant, name, fqdn, names, certificate, ca_chain, serial, key_fingerprint, not_before, not_after, renew_after, created_at, updated_at]
       properties:
         tenant: { type: string }
         name: { type: string }
-        fqdn: { type: string, description: "The certificate's own name and its common name: `<name>.<tenant>.<site>.deevnet.net`." }
+        fqdn: { type: string, description: "The certificate's own name and its common name: `<name>.<tenant>.deevnet.net`." }
         names:
           type: array
           items: { type: string }

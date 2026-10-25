@@ -38,11 +38,12 @@ func TestATenantIsIssuedACertificateForItsOwnName(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	if body["fqdn"] != "console.eds.mobile.deevnet.net" || body["tenant"] != "eds" || body["name"] != "console" {
+	if body["fqdn"] != "console.eds.deevnet.net" || body["tenant"] != "eds" || body["name"] != "console" {
 		t.Errorf("got %v / %v / %v", body["tenant"], body["name"], body["fqdn"])
 	}
 	names, _ := body["names"].([]any)
-	if len(names) != 2 || names[0] != "console.eds.mobile.deevnet.net" || names[1] != "www.eds.mobile.deevnet.net" {
+	if len(names) != 4 || names[0] != "console.eds.deevnet.net" || names[1] != "www.eds.deevnet.net" ||
+		names[2] != "console.eds.mobile.deevnet.net" || names[3] != "www.eds.mobile.deevnet.net" {
 		t.Errorf("names = %v", body["names"])
 	}
 	for _, field := range []string{"certificate", "ca_chain"} {

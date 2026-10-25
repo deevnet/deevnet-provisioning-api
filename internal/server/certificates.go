@@ -26,10 +26,13 @@ type certificateBody struct {
 	// and for its signature, which shows the sender holds the private key.
 	// Its subject, its names and its extensions are not used.
 	CSR string `json:"csr"`
-	// Names are further labels in the tenant's zone, beside the certificate's
-	// own. Labels, not names: the API appends the zone, so a tenant cannot
-	// spell a name outside it.
+	// Names are further labels, beside the certificate's own. Labels, not
+	// names: the API builds every name, so a tenant cannot spell one outside
+	// its own.
 	Names []string `json:"names,omitempty"`
+	// Sites are the sites to name the certificate at beside its site-less
+	// names, among those the API issues for. Empty means this site alone.
+	Sites []string `json:"sites,omitempty"`
 }
 
 type certificateView struct {

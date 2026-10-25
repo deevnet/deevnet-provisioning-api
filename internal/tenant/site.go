@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -46,6 +47,26 @@ func ValidWorkloadName(name string) bool {
 // ValidName reports whether name can be a tenant: a PVE SDN zone ID, which is
 // also a DNS label, a MinIO user and a VRF suffix.
 func ValidName(name string) bool { return nameRE.MatchString(name) }
+
+// reservedNames are labels no tenant may take (ADR-0040 §4). A tenant's name
+// is the second label of its site-less names, <service>.<tenant>.<root>, so a
+// tenant named for a site would hold that site's own names, and one named for
+// a global alias or the bus would hold those. The list grows with the sites
+// and aliases; the signing role allows any name two labels under the root, so
+// this is what keeps a tenant off them.
+var reservedNames = []string{
+	// sites, and the zones and environments retired before them
+	"home", "mobile", "mgmt", "dvnt", "dvntm",
+	// the label that holds a tenant's device names (ADR-0039 §4)
+	"device",
+	// the bus name every site's broker answers (ADR-0040 §5)
+	"mqtt",
+	// global aliases (Naming standard §4.3)
+	"artifacts",
+}
+
+// Reserved reports whether name is a label no tenant may take.
+func Reserved(name string) bool { return slices.Contains(reservedNames, name) }
 
 // TrustClass is one IoT trust class: the SSID a device joins and the VLAN its
 // key is bound to (ADR-0011 §3).
@@ -94,6 +115,10 @@ type Site struct {
 	Octet int
 	// deevnet.net
 	RootDomain string
+	// CertificateSites are the sites a tenant's certificate may name beside
+	// its site-less names (ADR-0040 §2): this one, and any a tenant is headed
+	// for. Empty means this site alone.
+	CertificateSites []string
 	// ADR-0002 VNI bases: 10000/20000 on mobile, 11000/21000 on home.
 	VRFVNIBase  int
 	VNetVNIBase int
@@ -282,6 +307,26 @@ func (s Site) Numbering(index int) Numbering {
 		Gateway:     fmt.Sprintf("10.%d.%d.1", s.Octet, third),
 		ReverseZone: fmt.Sprintf("%d.%d.10.in-addr.arpa", third, s.Octet),
 	}
+}
+
+// ServiceZone is where a tenant's services are named for their whole life,
+// wherever they run: <tenant>.<root> (ADR-0040 §1).
+func (s Site) ServiceZone(name string) string {
+	return name + "." + s.RootDomain
+}
+
+// SiteZone is a tenant's names at one site, <tenant>.<site>.<root>
+// (ADR-0040 §2).
+func (s Site) SiteZone(name, site string) string {
+	return fmt.Sprintf("%s.%s.%s", name, site, s.RootDomain)
+}
+
+// certificateSites are the sites a certificate may name.
+func (s Site) certificateSites() []string {
+	if len(s.CertificateSites) == 0 {
+		return []string{s.Name}
+	}
+	return s.CertificateSites
 }
 
 // Zone is a tenant's forward zone, <tenant>.<site>.<root>.
