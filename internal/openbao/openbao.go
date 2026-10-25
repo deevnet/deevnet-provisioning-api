@@ -76,6 +76,11 @@ func New(cfg Config) (*Client, error) {
 // errForbidden is a 403: a token that expired or was revoked.
 var errForbidden = errors.New("openbao: permission denied")
 
+// ErrUnavailable is OpenBao sealed, unreachable or failing: every call that
+// did not get an answer about the request itself. A refused decrypt is not
+// one, and is what a lost secret looks like (ADR-0042 §3).
+var ErrUnavailable = tenant.ErrSecretsUnavailable
+
 func (c *Client) login(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -253,6 +258,32 @@ func (c *Client) SignServer(ctx context.Context, csrPEM string, names []string) 
 	return tenant.SignedCertificate{Certificate: out.Data.Certificate, Chain: chain}, nil
 }
 
+// Health says whether OpenBao can serve the API: "ok", "sealed",
+// "uninitialized" or "unreachable". It needs no token, so readiness can ask
+// without logging in. A standby answers for the active node and is ok.
+func (c *Client) Health(ctx context.Context) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(c.cfg.Addr, "/")+"/v1/sys/health?standbyok=true&perfstandbyok=true", nil)
+	if err != nil {
+		return "unreachable"
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "unreachable"
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return "ok"
+	case http.StatusServiceUnavailable:
+		return "sealed"
+	case http.StatusNotImplemented:
+		return "uninitialized"
+	default:
+		return "unreachable"
+	}
+}
+
 // ErrNotRedeemable is a wrapping token that was already spent, expired, or
 // never existed. OpenBao does not say which, and neither does the API.
 var ErrNotRedeemable = tenant.ErrNotRedeemable
@@ -287,6 +318,9 @@ type statusError struct {
 
 func (e *statusError) Error() string { return fmt.Sprintf("status %d: %s", e.code, e.body) }
 
+// A 5xx is OpenBao's own state, never the request's: 503 is a sealed store.
+func (e *statusError) Is(target error) bool { return target == ErrUnavailable && e.code >= 500 }
+
 func (c *Client) call(ctx context.Context, method, path, token string, headers map[string]string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -311,7 +345,11 @@ func (c *Client) call(ctx context.Context, method, path, token string, headers m
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		// The caller giving up is not OpenBao being down.
+		if ctx.Err() != nil {
+			return err
+		}
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

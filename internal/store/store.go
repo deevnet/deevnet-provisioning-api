@@ -106,34 +106,53 @@ func (p *Postgres) seal(ctx context.Context, s tenant.Secrets) (tenant.Secrets, 
 // secret wins over a stored one (ADR-0015 §4) - so reading it back as empty is
 // what lets the tenant put itself right. Failing the read instead made the
 // tenant unable even to authenticate, which closed the documented way back.
+//
+// A sealed or unreachable OpenBao is not that, and fails the read: the secret
+// is still there, and reading it as empty would have the next ensure re-mint a
+// log token or a password that works today (ADR-0042 §3).
 func (p *Postgres) open(ctx context.Context, s tenant.Secrets) (tenant.Secrets, error) {
 	if p.sealer == nil {
 		return s, nil
 	}
 	var bad bool
-	s.TSIG, bad = p.openOne(ctx, s.TSIG, "tsig")
+	var err error
+	if s.TSIG, bad, err = p.openOne(ctx, s.TSIG, "tsig"); err != nil {
+		return tenant.Secrets{}, err
+	}
 	s.Unreadable = bad
-	s.State, bad = p.openOne(ctx, s.State, "state")
+	if s.State, bad, err = p.openOne(ctx, s.State, "state"); err != nil {
+		return tenant.Secrets{}, err
+	}
 	s.Unreadable = s.Unreadable || bad
 	// A log token that will not open is NOT reported as Unreadable: that flag
 	// tells a tenant to supply its secrets again, and a log token is not one a
 	// tenant can supply. An empty one is re-minted on the next ensure.
-	s.LogIngest, _ = p.openOne(ctx, s.LogIngest, "log-ingest")
-	s.LogRead, _ = p.openOne(ctx, s.LogRead, "log-read")
+	if s.LogIngest, _, err = p.openOne(ctx, s.LogIngest, "log-ingest"); err != nil {
+		return tenant.Secrets{}, err
+	}
+	if s.LogRead, _, err = p.openOne(ctx, s.LogRead, "log-read"); err != nil {
+		return tenant.Secrets{}, err
+	}
 	// The same for the dashboard password: re-minted, never asked for.
-	s.DashboardPassword, _ = p.openOne(ctx, s.DashboardPassword, "dashboard-password")
+	if s.DashboardPassword, _, err = p.openOne(ctx, s.DashboardPassword, "dashboard-password"); err != nil {
+		return tenant.Secrets{}, err
+	}
 	return s, nil
 }
 
 // The bool says the stored value was there and would not open, which is what
-// the tenant is told so it can supply it again. An empty column is not that.
-func (p *Postgres) openOne(ctx context.Context, stored, what string) (string, bool) {
+// the tenant is told so it can supply it again. An empty column is not that,
+// and nor is OpenBao being sealed, which is the error.
+func (p *Postgres) openOne(ctx context.Context, stored, what string) (string, bool, error) {
 	out, err := p.sealer.Open(ctx, stored)
+	if errors.Is(err, tenant.ErrSecretsUnavailable) {
+		return "", false, err
+	}
 	if err != nil {
 		p.log().Error("stored secret will not open; it must be supplied again", "secret", what, "err", err)
-		return "", true
+		return "", true, nil
 	}
-	return out, false
+	return out, false, nil
 }
 
 // Migrate applies every embedded migration not yet recorded, in order, each in

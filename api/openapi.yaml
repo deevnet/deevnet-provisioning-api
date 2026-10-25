@@ -23,8 +23,10 @@ info:
       state is the authoritative copy.
     - **Errors are `{"error": "..."}`.** The text never names a backend host or carries a secret.
     - **Unknown fields are refused** with `400`, and request bodies are capped at 64 KB.
-    - **`/v1` answers `503`** until the database schema is migrated, and tenant routes answer
-      `501` on an API that has no site configured.
+    - **`/v1` answers `503`** until the database schema is migrated, and while OpenBao is sealed
+      or unreachable: a tenant's secrets cannot be opened, so its work is refused before anything
+      changes, and nothing stored is lost or re-minted. A tenant token is not told `401` then.
+      Tenant routes answer `501` on an API that has no site configured.
 servers:
   - url: "{endpoint}"
     description: A site's API. The provider reads it from DEEVNET_API_ENDPOINT.
@@ -86,7 +88,7 @@ paths:
       tags: [Service]
       operationId: getReadiness
       summary: Readiness
-      description: The API can do work, meaning its database answers and its schema is in place.
+      description: The API can do work, meaning its database answers, its schema is in place, and OpenBao, where the API uses it, is open.
       security: []
       responses:
         "200":
@@ -96,11 +98,13 @@ paths:
               schema: { $ref: "#/components/schemas/Readiness" }
               example: { status: ok, database: ok }
         "503":
-          description: The database is unreachable or still migrating. The reason is logged, not returned.
+          description: The database is unreachable or still migrating, or OpenBao is sealed, uninitialized or unreachable. The reason is logged, not returned.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Readiness" }
-              example: { status: unavailable, database: unreachable }
+              examples:
+                database: { value: { status: unavailable, database: unreachable } }
+                sealed: { value: { status: unavailable, database: ok, openbao: sealed } }
   /version:
     get:
       tags: [Service]
@@ -1198,11 +1202,13 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: 'backend step "dns" failed' }
     NotMigrated:
-      description: The database schema is not migrated yet.
+      description: The database schema is not migrated yet, or OpenBao is sealed or unreachable. Nothing was changed.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: database not migrated yet }
+          examples:
+            migrating: { value: { error: database not migrated yet } }
+            sealed: { value: { error: "OpenBao is sealed or unreachable; tenant work waits until it is opened" } }
   examples:
     TenantCreated:
       summary: A created tenant
@@ -1260,6 +1266,10 @@ components:
       properties:
         status: { type: string, enum: [ok, unavailable] }
         database: { type: string, enum: [ok, unreachable, migrating] }
+        openbao:
+          type: string
+          enum: [ok, sealed, uninitialized, unreachable]
+          description: Present when the API uses OpenBao.
     AdmissionRequest:
       type: object
       required: [name]

@@ -6,6 +6,28 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Changed
+
+- **A sealed OpenBao is unavailable, not a lost secret** (CHG-0052, ADR-0042 §3). While OpenBao
+  is sealed or unreachable, tenant work answers `503` with an error that says so, before
+  anything changes. A stored secret is no longer marked unreadable, emptied or re-minted because
+  of it: before, a reconcile against a sealed store would have replaced working log tokens, the
+  dashboard password and Wi-Fi keys. A ciphertext OpenBao answers and refuses (a rebuilt Transit
+  key) is still a lost secret, as before.
+- A tenant token presented while OpenBao is sealed gets `503`, not `401`.
+- `/readyz` reports `openbao` (`ok`, `sealed`, `uninitialized`, `unreachable`) and is `503`
+  unless it is `ok`.
+- **The API starts while OpenBao is sealed.** It used to exit when it could not read its backend
+  credentials, and restart until OpenBao opened. It now serves readiness, answers `503` on `/v1`,
+  and reads them as soon as OpenBao opens. A configuration error still stops it.
+
+### Upgrading
+
+- A deploy's readiness wait fails while OpenBao is sealed. The `deevnet_api` role says so in its
+  message; unseal and run it again.
+
 ## 0.12.0 (2026-10-18)
 
 ### Added

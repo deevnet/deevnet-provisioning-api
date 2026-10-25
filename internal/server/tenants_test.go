@@ -400,3 +400,33 @@ func TestTheEgressAgentReadsOnlyTheVRFList(t *testing.T) {
 		t.Errorf("no agent configured: %d, want 401", rec.Code)
 	}
 }
+
+// A sealed store answers 503 naming the seal, to the operator and to a tenant
+// alike. A tenant is not told 401: its token is fine.
+func TestASealedStoreIs503(t *testing.T) {
+	h, st, _ := tenantServer(t)
+	rec, body := call(t, h, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %v", rec.Code, body)
+	}
+	tok, _ := body["api_token"].(string)
+	if tok == "" {
+		t.Fatalf("create returned no API token: %v", body)
+	}
+
+	st.Sealed = true
+	for _, c := range []struct{ who, token, method, path string }{
+		{"operator read", "s3cret", http.MethodGet, "/v1/tenants/tdemo"},
+		{"operator reconcile", "s3cret", http.MethodPost, "/v1/tenants/tdemo/reconcile"},
+		{"tenant read", tok, http.MethodGet, "/v1/tenants/tdemo"},
+	} {
+		rec, body := callAs(t, h, c.token, c.method, c.path, "")
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: %d %v, want 503", c.who, rec.Code, body)
+			continue
+		}
+		if msg, _ := body["error"].(string); !strings.Contains(msg, "sealed") {
+			t.Errorf("%s: error %q does not name the seal", c.who, msg)
+		}
+	}
+}

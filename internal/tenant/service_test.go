@@ -544,24 +544,24 @@ func TestAuthenticate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c, ok := svc.Authenticate(ctx, res.Issued.APIToken); !ok || c.Tenant != "tdemo" || !c.Registered {
+	if c, ok, err := svc.Authenticate(ctx, res.Issued.APIToken); err != nil || !ok || c.Tenant != "tdemo" || !c.Registered {
 		t.Fatalf("current token: %+v %v", c, ok)
 	}
 
 	// Another token the API issued for tdemo, but not the one the registry
 	// holds: revoked.
 	stale, _ := testTokens.Issue("tdemo")
-	if _, ok := svc.Authenticate(ctx, stale); ok {
+	if _, ok, _ := svc.Authenticate(ctx, stale); ok {
 		t.Error("a token the registry does not hold was accepted for a registered tenant")
 	}
 
 	// The registry does not know eds: its genuine token authenticates as an
 	// unregistered caller, which may only restore itself.
 	edsTok, _ := testTokens.Issue("eds")
-	if c, ok := svc.Authenticate(ctx, edsTok); !ok || c.Tenant != "eds" || c.Registered {
+	if c, ok, err := svc.Authenticate(ctx, edsTok); err != nil || !ok || c.Tenant != "eds" || c.Registered {
 		t.Fatalf("unregistered tenant: %+v %v", c, ok)
 	}
-	if _, ok := svc.Authenticate(ctx, "dvt1.eds.forged.mac"); ok {
+	if _, ok, _ := svc.Authenticate(ctx, "dvt1.eds.forged.mac"); ok {
 		t.Error("a forged token authenticated")
 	}
 }

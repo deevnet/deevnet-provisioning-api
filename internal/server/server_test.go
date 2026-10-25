@@ -120,3 +120,41 @@ func TestNotMigratedIsNotReady(t *testing.T) {
 		t.Fatalf("/v1 without a token before migration: %d, want 401 first", rec.Code)
 	}
 }
+
+type fakeSecrets string
+
+func (f fakeSecrets) Health(context.Context) string { return string(f) }
+
+// A sealed OpenBao is not ready, and the body says so, so a deploy can tell
+// "up, but sealed" from "not up" (ADR-0042 §3).
+func TestSealedIsNotReady(t *testing.T) {
+	for _, state := range []string{"sealed", "unreachable", "uninitialized"} {
+		h := New(Config{Token: "s3cret", DB: fakeDB{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Secrets: fakeSecrets(state)})
+		rec, body := do(t, h, http.MethodGet, "/readyz", "")
+		if rec.Code != http.StatusServiceUnavailable || body["openbao"] != state || body["database"] != "ok" {
+			t.Errorf("%s: got %d %v, want 503 openbao=%s database=ok", state, rec.Code, body, state)
+		}
+	}
+	h := New(Config{Token: "s3cret", DB: fakeDB{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Secrets: fakeSecrets("ok")})
+	if rec, body := do(t, h, http.MethodGet, "/readyz", ""); rec.Code != http.StatusOK || body["openbao"] != "ok" {
+		t.Errorf("open: got %d %v, want 200 openbao=ok", rec.Code, body)
+	}
+}
+
+// Started while OpenBao was sealed: /v1 answers 503 until the API has read
+// what it needs, and a caller without a token is still told 401 first.
+func TestV1WaitsForSecrets(t *testing.T) {
+	h := New(Config{
+		Token:         "s3cret",
+		DB:            fakeDB{},
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SecretsLoaded: func() bool { return false },
+	})
+	rec, body := do(t, h, http.MethodGet, "/v1/tenants", "s3cret")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(body["error"], "sealed") {
+		t.Fatalf("/v1 while waiting: %d %v, want 503 naming the seal", rec.Code, body)
+	}
+	if rec, _ := do(t, h, http.MethodGet, "/v1/tenants", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/v1 without a token while waiting: %d, want 401 first", rec.Code)
+	}
+}

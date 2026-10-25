@@ -70,9 +70,14 @@ func identify(operatorToken, agentToken string, tenants *tenant.Service, next ht
 		case auth.Equal(tok, agentToken):
 			p.agent = true
 		case tenants != nil:
-			if c, ok := tenants.Authenticate(r.Context(), tok); ok {
+			c, ok, err := tenants.Authenticate(r.Context(), tok)
+			switch {
+			case err != nil:
+				writeUnavailable(w)
+				return
+			case ok:
 				p.tenant, p.registered = c.Tenant, c.Registered
-			} else {
+			default:
 				p.presented = tok
 			}
 		default:

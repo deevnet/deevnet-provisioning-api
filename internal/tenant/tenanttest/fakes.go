@@ -18,7 +18,10 @@ import (
 // Store is an in-memory tenant.Store.
 type Store struct {
 	// Unreadable: see Get.
-	Unreadable    bool
+	Unreadable bool
+	// Sealed makes every read of a sealed secret fail as a sealed OpenBao
+	// does in the real store: an error, never an empty value.
+	Sealed        bool
 	mu            sync.Mutex
 	records       map[string]tenant.Record
 	workloads     map[string]tenant.Workload
@@ -42,6 +45,9 @@ func (s *Store) Get(_ context.Context, name string) (tenant.Record, error) {
 	r, ok := s.records[name]
 	if !ok {
 		return tenant.Record{}, tenant.ErrNotFound
+	}
+	if s.Sealed {
+		return tenant.Record{}, tenant.ErrSecretsUnavailable
 	}
 	r.Steps = append([]tenant.Step(nil), r.Steps...)
 	if s.Unreadable {
@@ -277,6 +283,9 @@ func (s *Store) GetAdmissionKey(_ context.Context, name string) (tenant.Admissio
 	if !ok {
 		return tenant.AdmissionKey{}, tenant.ErrNotFound
 	}
+	if s.Sealed {
+		return tenant.AdmissionKey{}, tenant.ErrSecretsUnavailable
+	}
 	return k, nil
 }
 
@@ -294,6 +303,9 @@ func (s *Store) GetWiFiKey(_ context.Context, tenantName, name string) (tenant.W
 	if !ok {
 		return tenant.WiFiKey{}, tenant.ErrNotFound
 	}
+	if s.Sealed {
+		return tenant.WiFiKey{}, tenant.ErrSecretsUnavailable
+	}
 	if s.Unreadable {
 		k.PSK, k.Unreadable = "", true
 	}
@@ -306,6 +318,9 @@ func (s *Store) ListWiFiKeys(_ context.Context, tenantName string) ([]tenant.WiF
 	var out []tenant.WiFiKey
 	for _, k := range s.wifiKeys {
 		if k.Tenant == tenantName {
+			if s.Sealed {
+				return nil, tenant.ErrSecretsUnavailable
+			}
 			if s.Unreadable {
 				k.PSK, k.Unreadable = "", true
 			}
