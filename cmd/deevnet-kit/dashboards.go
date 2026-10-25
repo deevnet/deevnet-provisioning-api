@@ -69,8 +69,8 @@ func dashboardEnv(st state, h string) string {
 GRAFANA_AUTH=%s:%s
 GRAFANA_ORG_ID=%d
 TF_VAR_grafana_org_id=%d
-GRAFANA_CA_CERT=deevnet-kit-ca.pem
-`, dashboardURL(h), st.Tenant, st.DashboardPassword, st.DashboardOrg, st.DashboardOrg)
+GRAFANA_CA_CERT=%s
+`, dashboardURL(h), st.Tenant, st.DashboardPassword, st.DashboardOrg, st.DashboardOrg, st.caExportName())
 }
 
 func (k *kit) cmdDashboards() error {
@@ -81,9 +81,10 @@ func (k *kit) cmdDashboards() error {
 	if st.GrafanaAdminPassword == "" || st.DashboardPassword == "" {
 		return fmt.Errorf("this card was initialised without Grafana; its state has no Grafana secrets")
 	}
-	// localhost for both: the certificate names it, and a .local name is
-	// not resolvable from every service.
-	local := dashboardURL("localhost")
+	// Names the certificate holds and this Pi resolves itself: localhost on
+	// the card's own CA, the Deevnet names mapped to loopback on a Deevnet Pi.
+	// A .local name is not resolvable from every service.
+	local := dashboardURL(st.name("grafana"))
 	if err := waitHealthy(local, k.caFile(), grafanaReady); err != nil {
 		return err
 	}
@@ -92,7 +93,7 @@ func (k *kit) cmdDashboards() error {
 		AdminUser:     grafanaAdmin,
 		AdminPassword: st.GrafanaAdminPassword,
 		CAFile:        k.caFile(),
-		LogEndpoint:   fmt.Sprintf("https://localhost:%d", logPort),
+		LogEndpoint:   fmt.Sprintf("https://%s:%d", st.name("logs"), logPort),
 	})
 	if err != nil {
 		return err

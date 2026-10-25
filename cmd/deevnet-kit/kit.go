@@ -68,6 +68,11 @@ type state struct {
 	GrafanaSecretKey     string `json:"grafana_secret_key"`
 	DashboardPassword    string `json:"dashboard_password"`
 	DashboardOrg         int    `json:"dashboard_org"`
+
+	// PKI is empty while the card's own CA signs its certificate, and
+	// "deevnet" once a Tenant Service CA certificate is installed
+	// (deevnet-kit cert install, ADR-0041 §2).
+	PKI string `json:"pki,omitempty"`
 }
 
 // kit holds the paths. root is empty on a Pi and a temporary directory in
@@ -348,14 +353,14 @@ func (k *kit) renderLogStore(st state, reload bool) error {
 
 func (k *kit) writeBridgeEnv(st state) error {
 	env := fmt.Sprintf(`# deevnet-kit - generated; the log bridge's environment
-DEEVNET_BRIDGE_BROKER_URL=ssl://localhost:%d
+DEEVNET_BRIDGE_BROKER_URL=ssl://%s:%d
 DEEVNET_BRIDGE_BROKER_USERNAME=%s
 DEEVNET_BRIDGE_BROKER_PASSWORD=%s
 DEEVNET_BRIDGE_BROKER_CA_FILE=%s
-DEEVNET_BRIDGE_STORE_URL=https://localhost:%d
+DEEVNET_BRIDGE_STORE_URL=https://%s:%d
 DEEVNET_BRIDGE_STORE_TOKEN=%s
 DEEVNET_BRIDGE_STORE_CA_FILE=%s
-`, brokerPort, bridgeUser, st.BridgePassword, k.caFileOnHost(), logPort, st.BridgeStoreToken, k.caFileOnHost())
+`, st.name("mqtt"), brokerPort, bridgeUser, st.BridgePassword, k.caFileOnHost(), st.name("logs"), logPort, st.BridgeStoreToken, k.caFileOnHost())
 	return writeFile(k.bridgeEnv(), []byte(env), 0o600)
 }
 
@@ -399,13 +404,14 @@ func kitEnv(st state, h string, app appCreds) string {
 DEEVNET_TENANT=%s
 MQTT_HOST=%s
 MQTT_PORT=%d
-MQTT_CA_FILE=deevnet-kit-ca.pem
+MQTT_CA_FILE=%s
 LOG_ENDPOINT=https://%s:%d
 LOG_INGEST_TOKEN=%s
 LOG_READ_TOKEN=%s
 LOG_SELECT_HEADER=X-Deevnet-Partition
 LOG_DEVICE_PARTITION=%d-2
-`, st.Tenant, h, st.Tenant, h, brokerPort, h, logPort, st.IngestToken, st.ReadToken, st.Index) + appEnv(app) + dashboardEnv(st, h)
+`, st.Tenant, h, st.Tenant, st.appHost("mqtt", h), brokerPort, st.caExportName(), st.appHost("logs", h), logPort,
+		st.IngestToken, st.ReadToken, st.Index) + appEnv(app) + dashboardEnv(st, st.appHost("grafana", h))
 }
 
 func (k *kit) cmdExport(args []string) error {
@@ -433,7 +439,7 @@ func (k *kit) cmdExport(args []string) error {
 	if err != nil {
 		return err
 	}
-	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, kitCAExportName)
+	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, st.caExportName())
 	if err := writeFile(envPath, []byte(kitEnv(st, host(), creds)), 0o600); err != nil {
 		return err
 	}
@@ -461,13 +467,17 @@ func (k *kit) cmdStatus() error {
 		return err
 	}
 	h := host()
-	fmt.Printf("tenant   %s (index %d)\n", st.Tenant, st.Index)
-	fmt.Printf("broker   mqtts://%s:%d\n", h, brokerPort)
-	fmt.Printf("logs     https://%s:%d  (device logs: X-Deevnet-Partition: %d-2)\n", h, logPort, st.Index)
+	pki := "the card's own CA"
+	if st.deevnet() {
+		pki = "the Deevnet Root (a Deevnet Pi)"
+	}
+	fmt.Printf("tenant   %s (index %d); trusts %s\n", st.Tenant, st.Index, pki)
+	fmt.Printf("broker   mqtts://%s:%d\n", st.appHost("mqtt", h), brokerPort)
+	fmt.Printf("logs     https://%s:%d  (device logs: X-Deevnet-Partition: %d-2)\n", st.appHost("logs", h), logPort, st.Index)
 	if st.DashboardOrg > 0 {
-		fmt.Printf("grafana  https://%s:%d  (login %s; organisation %d)\n", h, dashboardPort, st.Tenant, st.DashboardOrg)
+		fmt.Printf("grafana  https://%s:%d  (login %s; organisation %d)\n", st.appHost("grafana", h), dashboardPort, st.Tenant, st.DashboardOrg)
 	} else {
-		fmt.Printf("grafana  https://%s:%d  (not set up yet: systemctl status deevnet-kit-dashboards)\n", h, dashboardPort)
+		fmt.Printf("grafana  https://%s:%d  (not set up yet: systemctl status deevnet-kit-dashboards)\n", st.appHost("grafana", h), dashboardPort)
 	}
 	fmt.Println()
 	bad := 0
@@ -485,11 +495,13 @@ func (k *kit) cmdStatus() error {
 	}
 	fmt.Printf("\n%d broker account(s); deevnet-kit account list\n", len(accts))
 	fmt.Printf("selftest %s\n", k.lastSelftest())
+	// A Deevnet Pi's certificate names no address: a device dials one and
+	// verifies the name.
 	missing, err := k.uncoveredAddrs()
 	if err != nil {
 		return err
 	}
-	if len(missing) > 0 {
+	if len(missing) > 0 && !st.deevnet() {
 		// Not a failure of the services, but a device dialling this address
 		// will refuse the certificate - and say only "TLS error".
 		fmt.Printf("\nthe certificate does not name %v; a device dialling it will fail - run: sudo deevnet-kit regen-certs\n", missing)

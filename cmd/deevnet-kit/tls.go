@@ -165,8 +165,13 @@ func (k *kit) uncoveredAddrs() ([]net.IP, error) {
 }
 
 func (k *kit) cmdRegenCerts() error {
-	if _, err := k.loadState(); err != nil {
+	st, err := k.loadState()
+	if err != nil {
 		return err
+	}
+	// It would sign with the card's CA, which nothing on a Deevnet Pi trusts.
+	if st.deevnet() {
+		return errors.New("this is a Deevnet Pi: renew with deevnet-kit cert request, have it signed, then cert install")
 	}
 	if err := k.issueServerCert(); err != nil {
 		return err
