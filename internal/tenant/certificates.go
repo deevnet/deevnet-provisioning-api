@@ -27,18 +27,22 @@ import (
 // signer:
 //
 //   - The tenant sends labels, never names. Every name in a certificate is
-//     built here as <label>.<the caller's zone>, so a tenant cannot spell a
-//     name outside its zone: it never spells a zone.
+//     built here: <label>.<tenant>.<root>, the service's name wherever it
+//     runs, then <label>.<tenant>.<site>.<root> for each site the tenant
+//     asks for among those this API issues for (ADR-0040 §1-§3). A tenant
+//     cannot spell a name outside its own: it never spells a zone.
 //   - The request is read for its public key and nothing else. Its subject,
 //     its names and its extensions are not used (Certificates standard 4.6).
 //   - What the signer returns is checked before anyone is handed it. A
 //     certificate that says more than was asked is refused here, not trusted
 //     because of where it came from.
 //
-// The signer's own role holds the first two again (it permits only names at
-// least two labels below the site's zone and ignores the request's names), so
-// neither this package nor the secret store is the only thing in the way of a
-// certificate for a name that is not a tenant's.
+// The signer's own role ignores the request's names and permits only names at
+// least two labels below the root. That no longer tells a tenant's name from a
+// site's (console.eds.deevnet.net and grafana.home.deevnet.net are both two
+// labels down), so the reserved tenant names (Reserved) are what keep a
+// tenant off a site's names, here alone until each tenant has a role of its
+// own.
 
 const (
 	// CertificateRenewBefore is how long before expiry a certificate is
@@ -62,9 +66,12 @@ type CertificateRequest struct {
 	// CSR is a PEM PKCS#10 request. Only its public key is used, and its
 	// signature, which shows the sender holds the private key.
 	CSR string
-	// Names are further labels in the tenant's zone for the certificate to be
-	// valid for, beside its own.
+	// Names are further labels for the certificate to be valid for, beside
+	// its own.
 	Names []string
+	// Sites are the sites to name it at as well, each one the API issues for.
+	// Empty means this site alone.
+	Sites []string
 }
 
 // Certificate is a server certificate the API issued, as the registry holds
@@ -136,11 +143,11 @@ func (s *Service) PutCertificate(ctx context.Context, tenantName, name string, r
 	if err != nil {
 		return Certificate{}, false, err
 	}
-	zone := s.Site.Zone(tenantName)
-	names := make([]string, len(labels))
-	for i, label := range labels {
-		names[i] = label + "." + zone
+	sites, err := s.certificateSites(req.Sites)
+	if err != nil {
+		return Certificate{}, false, err
 	}
+	names := certificateNames(s.Site, tenantName, labels, sites)
 
 	csr, fingerprint, err := parseCertificateRequest(req.CSR)
 	if err != nil {
@@ -217,6 +224,41 @@ func (s *Service) DeleteCertificate(ctx context.Context, tenantName, name string
 	return s.Store.DeleteCertificate(ctx, tenantName, name)
 }
 
+// certificateSites checks the sites a certificate is asked to name.
+func (s *Service) certificateSites(asked []string) ([]string, error) {
+	allowed := s.Site.certificateSites()
+	if len(asked) == 0 {
+		return []string{s.Site.Name}, nil
+	}
+	var out []string
+	for _, site := range asked {
+		if !slices.Contains(allowed, site) {
+			return nil, invalid("site %q is not one this API issues for: %s", site, strings.Join(allowed, ", "))
+		}
+		if slices.Contains(out, site) {
+			return nil, invalid("site %q is given twice", site)
+		}
+		out = append(out, site)
+	}
+	return out, nil
+}
+
+// certificateNames are every name a certificate holds: each label's
+// site-less name first, its own first of all and so its common name, then
+// each label at each site (ADR-0040 §3).
+func certificateNames(site Site, tenantName string, labels, sites []string) []string {
+	names := make([]string, 0, len(labels)*(1+len(sites)))
+	for _, label := range labels {
+		names = append(names, label+"."+site.ServiceZone(tenantName))
+	}
+	for _, at := range sites {
+		for _, label := range labels {
+			names = append(names, label+"."+site.SiteZone(tenantName, at))
+		}
+	}
+	return names
+}
+
 // certificateLabels checks the certificate's own label and those beside it,
 // and returns them, its own first, the rest in the order given.
 func certificateLabels(name string, more []string) ([]string, error) {
@@ -224,12 +266,19 @@ func certificateLabels(name string, more []string) ([]string, error) {
 	if !ValidWorkloadName(name) {
 		return nil, invalid("certificate name %s", rule)
 	}
+	// device.<tenant>.<root> holds the tenant's device names (ADR-0039 §4).
+	if name == "device" {
+		return nil, invalid("certificate name %q is reserved for the tenant's devices", name)
+	}
 	labels := []string{name}
 	for _, label := range more {
 		// A label, so no dot: a tenant names things in its zone and never the
 		// zone, and "*" is not a label at all.
 		if !ValidWorkloadName(label) {
 			return nil, invalid("name %q %s; a name is one label in the tenant's zone, with no dot and no wildcard", label, rule)
+		}
+		if label == "device" {
+			return nil, invalid("name %q is reserved for the tenant's devices", label)
 		}
 		if slices.Contains(labels, label) {
 			return nil, invalid("name %q is given twice", label)

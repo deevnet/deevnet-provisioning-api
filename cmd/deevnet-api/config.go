@@ -294,6 +294,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		Name:              getenv("DEEVNET_SITE"),
 		Octet:             ints["DEEVNET_SITE_OCTET"],
 		RootDomain:        getenv("DEEVNET_ROOT_DOMAIN"),
+		CertificateSites:  list(getenv("DEEVNET_CERTIFICATE_SITES")),
 		VRFVNIBase:        ints["DEEVNET_VRF_VNI_BASE"],
 		VNetVNIBase:       ints["DEEVNET_VNET_VNI_BASE"],
 		ControllerID:      getenv("DEEVNET_FABRIC_CONTROLLER"),
@@ -651,4 +652,15 @@ func boolEnv(getenv func(string) string, key string, def bool) bool {
 		return def
 	}
 	return v
+}
+
+// list splits a comma-separated setting, dropping blanks.
+func list(v string) []string {
+	var out []string
+	for _, x := range strings.Split(v, ",") {
+		if x = strings.TrimSpace(x); x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
 }

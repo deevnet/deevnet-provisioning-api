@@ -58,11 +58,12 @@ func TestACertificateIsForANameInTheTenantsZone(t *testing.T) {
 	if !issued {
 		t.Error("the first request did not report a new certificate")
 	}
-	if len(c.Names) != 1 || c.Names[0] != "console.eds.mobile.deevnet.net" {
+	// Its name wherever it runs, then its name at this site (ADR-0040 §3).
+	if strings.Join(c.Names, ",") != "console.eds.deevnet.net,console.eds.mobile.deevnet.net" {
 		t.Fatalf("names = %v", c.Names)
 	}
 	leaf := leafOf(t, c)
-	if leaf.Subject.CommonName != "console.eds.mobile.deevnet.net" {
+	if leaf.Subject.CommonName != "console.eds.deevnet.net" {
 		t.Errorf("common name = %q", leaf.Subject.CommonName)
 	}
 
@@ -76,7 +77,7 @@ func TestACertificateIsForANameInTheTenantsZone(t *testing.T) {
 	}
 	if _, err := leaf.Verify(x509.VerifyOptions{
 		Roots: b.Signer.Roots(), Intermediates: intermediates,
-		DNSName: "console.eds.mobile.deevnet.net", KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSName: "console.eds.deevnet.net", KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}); err != nil {
 		t.Errorf("a client holding only the root cannot verify it: %v", err)
 	}
@@ -97,11 +98,11 @@ func TestWhatTheRequestSaysAboutItselfIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	leaf := leafOf(t, c)
-	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "console.eds.mobile.deevnet.net" {
+	if strings.Join(leaf.DNSNames, ",") != "console.eds.deevnet.net,console.eds.mobile.deevnet.net" {
 		t.Fatalf("the certificate is valid for %v", leaf.DNSNames)
 	}
 	// And the signer was never handed the request's names to consider.
-	if got := b.Signer.Calls[0]; len(got) != 1 || got[0] != "console.eds.mobile.deevnet.net" {
+	if got := b.Signer.Calls[0]; len(got) != 2 || got[0] != "console.eds.deevnet.net" {
 		t.Fatalf("the signer was asked for %v", got)
 	}
 }
@@ -115,7 +116,8 @@ func TestFurtherNamesAreLabelsInTheSameZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"console.eds.mobile.deevnet.net", "www.eds.mobile.deevnet.net", "lightd.eds.mobile.deevnet.net"}
+	want := []string{"console.eds.deevnet.net", "www.eds.deevnet.net", "lightd.eds.deevnet.net",
+		"console.eds.mobile.deevnet.net", "www.eds.mobile.deevnet.net", "lightd.eds.mobile.deevnet.net"}
 	if strings.Join(c.Names, ",") != strings.Join(want, ",") {
 		t.Fatalf("names = %v, want %v", c.Names, want)
 	}
@@ -392,7 +394,7 @@ func TestTwoTenantsWithTheSameLabelHoldDifferentNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Names[0] != "console.eds.mobile.deevnet.net" || b.Names[0] != "console.tdemo.mobile.deevnet.net" {
+	if a.Names[0] != "console.eds.deevnet.net" || b.Names[0] != "console.tdemo.deevnet.net" {
 		t.Fatalf("names: %v and %v", a.Names, b.Names)
 	}
 	if got, _ := svc.ListCertificates(ctx, "eds"); len(got) != 1 || got[0].Tenant != "eds" {
@@ -456,5 +458,67 @@ func TestRemovingATenantRemovesItsCertificates(t *testing.T) {
 	ready(t, svc, "eds")
 	if held, _ := svc.ListCertificates(ctx, "eds"); len(held) != 0 {
 		t.Fatalf("a tenant made again holds its predecessor's certificates: %+v", held)
+	}
+}
+
+// A service is named for its whole life, and the sites it runs at, or is headed
+// for, are extra names beside it (ADR-0040 §1-§3).
+func TestSitesAreExtraNames(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	svc.Site.CertificateSites = []string{"mobile", "home"}
+	ready(t, svc, "eds")
+
+	c, _, err := svc.PutCertificate(context.Background(), "eds", "console", tenant.CertificateRequest{
+		CSR: tenanttest.Request("x"), Names: []string{"mqtt"}, Sites: []string{"home", "mobile"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "console.eds.deevnet.net,mqtt.eds.deevnet.net," +
+		"console.eds.home.deevnet.net,mqtt.eds.home.deevnet.net," +
+		"console.eds.mobile.deevnet.net,mqtt.eds.mobile.deevnet.net"
+	if strings.Join(c.Names, ",") != want {
+		t.Fatalf("names = %v", c.Names)
+	}
+
+	for _, sites := range [][]string{{"elsewhere"}, {"home", "home"}} {
+		if _, _, err := svc.PutCertificate(context.Background(), "eds", "other", tenant.CertificateRequest{
+			CSR: tenanttest.Request("x"), Sites: sites}); !isInvalid(err) {
+			t.Errorf("sites %v: %v, want refused", sites, err)
+		}
+	}
+	// A site the API does not issue for is refused even when it is real.
+	svc.Site.CertificateSites = nil
+	if _, _, err := svc.PutCertificate(context.Background(), "eds", "other", tenant.CertificateRequest{
+		CSR: tenanttest.Request("x"), Sites: []string{"home"}}); !isInvalid(err) {
+		t.Errorf("home on an API that issues for mobile alone: %v, want refused", err)
+	}
+}
+
+// device.<tenant>.<root> holds a tenant's device names (ADR-0039 §4).
+func TestTheDeviceLabelIsReserved(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	ready(t, svc, "eds")
+	for _, req := range []struct {
+		name  string
+		names []string
+	}{{"device", nil}, {"console", []string{"device"}}} {
+		if _, _, err := svc.PutCertificate(context.Background(), "eds", req.name, tenant.CertificateRequest{
+			CSR: tenanttest.Request("x"), Names: req.names}); !isInvalid(err) {
+			t.Errorf("%s %v: %v, want refused", req.name, req.names, err)
+		}
+	}
+}
+
+// A tenant named for a site, a global alias or the bus would hold its names
+// (ADR-0040 §4).
+func TestReservedTenantNamesAreRefused(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	for _, name := range []string{"home", "mobile", "mgmt", "dvnt", "dvntm", "device", "mqtt", "artifacts"} {
+		if _, err := svc.Create(context.Background(), tenant.CreateRequest{Name: name}); !isInvalid(err) {
+			t.Errorf("create %q: %v, want refused", name, err)
+		}
+		if _, err := svc.Admit(context.Background(), name, ""); !isInvalid(err) {
+			t.Errorf("admit %q: %v, want refused", name, err)
+		}
 	}
 }

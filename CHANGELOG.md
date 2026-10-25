@@ -6,6 +6,31 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Changed
+
+- **A tenant's certificate names its service without a site, and its sites beside it**
+  (CHG-0054, ADR-0040). The common name and first name is `<certificate>.<tenant>.deevnet.net`,
+  then each further label the same way, then each label at each site, as
+  `<label>.<tenant>.<site>.deevnet.net`. A certificate asked for again is reissued with the new
+  names.
+- **Tenant names that are sites, the bus name or a global alias are refused** at create and
+  admission: `home`, `mobile`, `mgmt`, `dvnt`, `dvntm`, `device`, `mqtt`, `artifacts`.
+- `device` is refused as a certificate label: it holds a tenant's device names.
+
+### Added
+
+- `sites` on a certificate request: the sites to name it at, among `DEEVNET_CERTIFICATE_SITES`.
+  Empty means this site alone.
+
+### Upgrading
+
+- `DEEVNET_CERTIFICATE_SITES` (optional, comma-separated): the sites a certificate may name.
+  Unset means this site alone.
+- The Tenant Service CA's signing role must allow names two labels under the root, not only
+  under the site's zone: deevnet.mgmt sets it.
+
 ## 0.14.0 (2026-10-25)
 
 ### Added
