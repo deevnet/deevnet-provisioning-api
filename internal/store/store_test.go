@@ -409,3 +409,107 @@ func TestASealedStoreFailsTheReadAndForgetsNothing(t *testing.T) {
 		t.Errorf("admission key after unsealing: %+v %v", k, err)
 	}
 }
+
+// keyedSealer stands in for Transit with a current and a previous key; a
+// ciphertext names its key so the wrong one refuses it.
+type keyedSealer struct{ current, previous string }
+
+func (k keyedSealer) Seal(_ context.Context, plaintext string) (string, error) {
+	return "vault:v1:" + k.current + ":" + plaintext, nil
+}
+
+func (k keyedSealer) Open(_ context.Context, stored string) (string, error) {
+	for _, key := range []string{k.current, k.previous} {
+		if key == "" {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(stored, "vault:v1:"+key+":"); ok {
+			return rest, nil
+		}
+	}
+	return "", errors.New("decrypt: refused")
+}
+
+func (k keyedSealer) Reseal(ctx context.Context, stored string) (string, bool, error) {
+	if strings.HasPrefix(stored, "vault:v1:"+k.current+":") {
+		return stored, false, nil
+	}
+	plain, err := k.Open(ctx, stored)
+	if err != nil {
+		return "", false, err
+	}
+	s, _ := k.Seal(ctx, plain)
+	return s, true, nil
+}
+
+func TestResealMovesEverySealedColumn(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+	p.WithSealer(keyedSealer{current: "old"})
+	secrets := tenant.Secrets{TSIG: "tsig", State: "state", LogIngest: "ingest", LogRead: "read",
+		DashboardPassword: "dash", APITokenHash: tenant.HashToken("t")}
+	if _, err := p.Create(ctx, "treseal", secrets, lowest); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PutAdmissionKey(ctx, tenant.AdmissionKey{Tenant: "treseal", PSK: "admission", MAC: "02:00:00:00:00:02"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.PutWiFiKey(ctx, tenant.WiFiKey{Tenant: "treseal", Name: "k1", PSK: "wifi", TrustClass: "iot", Status: tenant.StatusReady}); err != nil {
+		t.Fatal(err)
+	}
+	// One value already under the new key, and one under a key that is gone.
+	if _, err := p.pool.Exec(ctx, `UPDATE tenants SET log_read_token = 'vault:v1:new:read', dashboard_password = 'vault:v1:gone:dash' WHERE name = 'treseal'`); err != nil {
+		t.Fatal(err)
+	}
+
+	ks := keyedSealer{current: "new", previous: "old"}
+	p.WithSealer(ks)
+	rep, err := p.Reseal(ctx, ks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(rep.Resealed); n != 5 || rep.Current != 1 || rep.Failed["tenants.dashboard_password"] != 1 {
+		t.Fatalf("report %+v, want 5 columns resealed, 1 current, the gone one failed", rep)
+	}
+
+	var raw []string
+	for _, q := range []string{
+		`SELECT tsig_secret FROM tenants WHERE name = 'treseal'`,
+		`SELECT state_secret FROM tenants WHERE name = 'treseal'`,
+		`SELECT log_ingest_token FROM tenants WHERE name = 'treseal'`,
+		`SELECT log_read_token FROM tenants WHERE name = 'treseal'`,
+		`SELECT psk FROM admission_keys WHERE tenant = 'treseal'`,
+		`SELECT psk FROM tenant_wifi_keys WHERE tenant = 'treseal'`,
+	} {
+		var v string
+		if err := p.pool.QueryRow(ctx, q).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, v)
+	}
+	for _, v := range raw {
+		if !strings.HasPrefix(v, "vault:v1:new:") {
+			t.Errorf("%q is not under the new key", v)
+		}
+	}
+	var gone string
+	p.pool.QueryRow(ctx, `SELECT dashboard_password FROM tenants WHERE name = 'treseal'`).Scan(&gone)
+	if gone != "vault:v1:gone:dash" {
+		t.Errorf("a value neither key opens was changed: %q", gone)
+	}
+
+	// Only the new key from here: everything that moved still opens.
+	p.WithSealer(keyedSealer{current: "new"})
+	got, err := p.Get(ctx, "treseal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Secrets.TSIG != "tsig" || got.Secrets.State != "state" || got.Secrets.LogIngest != "ingest" || got.Secrets.LogRead != "read" {
+		t.Errorf("secrets after the reseal: %+v", got.Secrets)
+	}
+
+	// A second run moves nothing.
+	if rep, err := p.Reseal(ctx, ks); err != nil || len(rep.Resealed) != 0 {
+		t.Errorf("second run: %+v %v, want nothing resealed", rep, err)
+	}
+}

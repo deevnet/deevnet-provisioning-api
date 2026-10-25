@@ -6,6 +6,25 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Added
+
+- **`deevnet-api reseal`** moves every stored tenant secret to the current Transit key and exits
+  (CHG-0036). It runs in the API's container with its environment:
+  `podman exec deevnet-api /usr/local/bin/deevnet-api reseal`. It prints how many values moved,
+  were already current, and opened under neither key, and fails if any did not open, so the
+  previous key is not retired while a value still needs it. A second run moves nothing.
+- `OPENBAO_TRANSIT_KEY_PREVIOUS`: the key being replaced. While it is set, a ciphertext the
+  current key refuses is tried with it, so tenants keep working between the switch and the
+  reseal.
+
+### Upgrading
+
+- To move to a new Transit key: set `OPENBAO_TRANSIT_KEY` to the new key and
+  `OPENBAO_TRANSIT_KEY_PREVIOUS` to the old, deploy, run `reseal`, then unset the previous key.
+  The API's policy needs decrypt on both keys meanwhile.
+
 ## 0.13.0 (2026-10-25)
 
 ### Changed
