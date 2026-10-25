@@ -1,0 +1,6 @@
+# The image builds from the source alone. bin/ holds every image tarball
+# made here, and copying it into the build filled the Builder's /home twice.
+bin/
+site/public/
+site/resources/
+.git/
