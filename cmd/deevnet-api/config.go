@@ -200,6 +200,29 @@ type wiring struct {
 	site    tenant.Site
 }
 
+// openbaoClient is the API's OpenBao client, or nil when OPENBAO_ADDR is
+// unset. Making one reaches nothing, so it serves readiness while the API
+// waits for a sealed OpenBao.
+func openbaoClient(getenv func(string) string) (*openbao.Client, error) {
+	if getenv("OPENBAO_ADDR") == "" {
+		return nil, nil
+	}
+	if missing := empty(getenv, openbaoEnv); len(missing) > 0 {
+		return nil, fmt.Errorf("OPENBAO_ADDR is set, but these are empty: %s", strings.Join(missing, ", "))
+	}
+	return openbao.New(openbao.Config{
+		Addr:       getenv("OPENBAO_ADDR"),
+		CAFile:     getenv("OPENBAO_CACERT"),
+		RoleID:     getenv("OPENBAO_ROLE_ID"),
+		SecretID:   getenv("OPENBAO_SECRET_ID"),
+		KVMount:    orDefault(getenv("OPENBAO_KV_MOUNT"), "deevnet-api"),
+		TransitKey: orDefault(getenv("OPENBAO_TRANSIT_KEY"), "tenant-secrets"),
+
+		ServiceMount: getenv("OPENBAO_TENANT_SERVICE_MOUNT"),
+		ServiceRole:  orDefault(getenv("OPENBAO_TENANT_SERVICE_ROLE"), "tenant-service"),
+	})
+}
+
 // tenantService builds the tenant service, or returns nothing when
 // DEEVNET_SITE is unset.
 func tenantService(ctx context.Context, getenv func(string) string) (wiring, error) {
@@ -217,22 +240,8 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		sealer   store.Sealer
 	)
 	if getenv("OPENBAO_ADDR") != "" {
-		if missing := empty(getenv, openbaoEnv); len(missing) > 0 {
-			return wiring{}, fmt.Errorf("OPENBAO_ADDR is set, but these are empty: %s", strings.Join(missing, ", "))
-		}
 		var err error
-		bao, err = openbao.New(openbao.Config{
-			Addr:       getenv("OPENBAO_ADDR"),
-			CAFile:     getenv("OPENBAO_CACERT"),
-			RoleID:     getenv("OPENBAO_ROLE_ID"),
-			SecretID:   getenv("OPENBAO_SECRET_ID"),
-			KVMount:    orDefault(getenv("OPENBAO_KV_MOUNT"), "deevnet-api"),
-			TransitKey: orDefault(getenv("OPENBAO_TRANSIT_KEY"), "tenant-secrets"),
-
-			ServiceMount: getenv("OPENBAO_TENANT_SERVICE_MOUNT"),
-			ServiceRole:  orDefault(getenv("OPENBAO_TENANT_SERVICE_ROLE"), "tenant-service"),
-		})
-		if err != nil {
+		if bao, err = openbaoClient(getenv); err != nil {
 			return wiring{}, err
 		}
 		kvPath := orDefault(getenv("OPENBAO_KV_PATH"), "backends")

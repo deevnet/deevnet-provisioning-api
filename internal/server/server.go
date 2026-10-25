@@ -23,6 +23,12 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
+// SecretsHealth is OpenBao as readiness sees it: "ok", or why not ("sealed",
+// "uninitialized", "unreachable"). *openbao.Client satisfies it.
+type SecretsHealth interface {
+	Health(ctx context.Context) string
+}
+
 type Config struct {
 	Token string
 	// AgentToken is the exit node's egress agent (ADR-0015 §7). Empty means no
@@ -36,6 +42,11 @@ type Config struct {
 	// Migrated reports whether the database schema is in place. Nil means it
 	// is, which is what tests that never touch a database want.
 	Migrated func() bool
+	// Secrets is OpenBao, for readiness. Nil means the API runs without it.
+	Secrets SecretsHealth
+	// SecretsLoaded reports whether the API has read what it needs from
+	// OpenBao at startup. Until it has, /v1 answers 503. Nil means it has.
+	SecretsLoaded func() bool
 }
 
 func New(cfg Config) http.Handler {
@@ -48,7 +59,10 @@ func New(cfg Config) http.Handler {
 	if cfg.Migrated == nil {
 		cfg.Migrated = func() bool { return true }
 	}
-	mux.HandleFunc("GET /readyz", readyz(cfg.DB, cfg.Migrated, cfg.Logger))
+	if cfg.SecretsLoaded == nil {
+		cfg.SecretsLoaded = func() bool { return true }
+	}
+	mux.HandleFunc("GET /readyz", readyz(cfg.DB, cfg.Migrated, cfg.Secrets, cfg.Logger))
 	mux.HandleFunc("GET /version", versionInfo)
 
 	if cfg.Token == "" {
@@ -59,7 +73,7 @@ func New(cfg Config) http.Handler {
 		tenantRoutes(v1, cfg.Tenants, cfg.Logger)
 	}
 	v1.HandleFunc("/v1/", knownCaller(notImplemented))
-	mux.Handle("/v1/", requireToken(requireMigrated(cfg.Migrated, identify(cfg.Token, cfg.AgentToken, cfg.Tenants, v1))))
+	mux.Handle("/v1/", requireToken(requireMigrated(cfg.Migrated, requireSecrets(cfg.SecretsLoaded, identify(cfg.Token, cfg.AgentToken, cfg.Tenants, v1)))))
 
 	return logRequests(cfg.Logger, mux)
 }
@@ -70,9 +84,11 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyz reports whether the API can do work: its database answers and its
-// schema is in place.
-func readyz(db Pinger, migrated func() bool, logger *slog.Logger) http.HandlerFunc {
+// readyz reports whether the API can do work: its database answers, its
+// schema is in place, and OpenBao is open. A sealed OpenBao is not ready,
+// because tenant work is refused while it is sealed (ADR-0042 §3); the body
+// says which, so a deploy can tell "up, but sealed" from "not up".
+func readyz(db Pinger, migrated func() bool, secrets SecretsHealth, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -94,8 +110,38 @@ func readyz(db Pinger, migrated func() bool, logger *slog.Logger) http.HandlerFu
 			})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "database": "ok"})
+		if secrets == nil {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "database": "ok"})
+			return
+		}
+		if state := secrets.Health(ctx); state != "ok" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status":   "unavailable",
+				"database": "ok",
+				"openbao":  state,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "database": "ok", "openbao": "ok"})
 	}
+}
+
+// requireSecrets answers 503 until the API has read its backend credentials
+// from OpenBao, which it waits for when it starts sealed.
+func requireSecrets(loaded func() bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loaded() {
+			writeUnavailable(w)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writeUnavailable is every refusal for a sealed or unreachable OpenBao: one
+// status and one message, whichever route met it.
+func writeUnavailable(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": tenant.ErrSecretsUnavailable.Error()})
 }
 
 func requireMigrated(migrated func() bool, next http.Handler) http.Handler {

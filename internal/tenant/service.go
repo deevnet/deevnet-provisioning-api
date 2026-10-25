@@ -1053,26 +1053,31 @@ type Caller struct {
 // Authenticate returns the tenant a bearer token speaks for. A registered
 // tenant is accepted only with the token whose hash the registry holds, so a
 // replaced token is revoked.
-func (s *Service) Authenticate(ctx context.Context, token string) (Caller, bool) {
+//
+// The error is ErrSecretsUnavailable only: a sealed OpenBao leaves the caller
+// unknown, not refused, and saying 401 would tell a tenant its token is bad.
+func (s *Service) Authenticate(ctx context.Context, token string) (Caller, bool, error) {
 	if s.Tokens == nil {
-		return Caller{}, false
+		return Caller{}, false, nil
 	}
 	name, ok := s.Tokens.Verify(token)
 	if !ok {
-		return Caller{}, false
+		return Caller{}, false, nil
 	}
 	rec, err := s.Store.Get(ctx, name)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return Caller{Tenant: name}, true
+		return Caller{Tenant: name}, true, nil
+	case errors.Is(err, ErrSecretsUnavailable):
+		return Caller{}, false, err
 	case err != nil:
 		s.logger().Error("authenticating tenant token", "tenant", name, "err", err)
-		return Caller{}, false
+		return Caller{}, false, nil
 	}
 	if subtleEqual(rec.Secrets.APITokenHash, HashToken(token)) {
-		return Caller{Tenant: name, Registered: true}, true
+		return Caller{Tenant: name, Registered: true}, true, nil
 	}
-	return Caller{}, false
+	return Caller{}, false, nil
 }
 
 // HashToken is how a tenant API token is stored.

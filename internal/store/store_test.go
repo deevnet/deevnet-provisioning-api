@@ -339,3 +339,73 @@ func TestDashboardLoginIsSealedAndItsOrgKept(t *testing.T) {
 		t.Fatalf("unreadable password read as %q (%v)", got.Secrets.DashboardPassword, err)
 	}
 }
+
+// A sealed OpenBao is not a rebuilt Transit key: nothing is lost, so nothing
+// may read as empty, or the next ensure re-mints log tokens, passwords and
+// Wi-Fi keys that still work (ADR-0042 §3).
+type sealedSealer struct{}
+
+func (sealedSealer) Seal(context.Context, string) (string, error) {
+	return "", fmt.Errorf("openbao: encrypt: %w", tenant.ErrSecretsUnavailable)
+}
+
+func (sealedSealer) Open(context.Context, string) (string, error) {
+	return "", fmt.Errorf("openbao: decrypt: %w", tenant.ErrSecretsUnavailable)
+}
+
+// prefixSealer is a Transit stand-in that opens what it sealed.
+type prefixSealer struct{}
+
+func (prefixSealer) Seal(_ context.Context, plaintext string) (string, error) {
+	return "vault:v1:" + plaintext, nil
+}
+
+func (prefixSealer) Open(_ context.Context, stored string) (string, error) {
+	return strings.TrimPrefix(stored, "vault:v1:"), nil
+}
+
+func TestASealedStoreFailsTheReadAndForgetsNothing(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+	p.WithSealer(prefixSealer{})
+	secrets := tenant.Secrets{TSIG: "tsig-secret", State: "state-secret", LogIngest: "ingest",
+		LogRead: "read", DashboardPassword: "dash", APITokenHash: tenant.HashToken("t")}
+	if _, err := p.Create(ctx, "tsealed", secrets, lowest); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PutAdmissionKey(ctx, tenant.AdmissionKey{Tenant: "tsealed", PSK: "admission-psk", MAC: "02:00:00:00:00:01"}); err != nil {
+		t.Fatal(err)
+	}
+
+	p.WithSealer(sealedSealer{})
+	if _, err := p.Get(ctx, "tsealed"); !errors.Is(err, tenant.ErrSecretsUnavailable) {
+		t.Fatalf("get while sealed: %v, want ErrSecretsUnavailable", err)
+	}
+	if _, err := p.GetAdmissionKey(ctx, "tsealed"); !errors.Is(err, tenant.ErrSecretsUnavailable) {
+		t.Fatalf("admission key while sealed: %v, want ErrSecretsUnavailable", err)
+	}
+	if _, err := p.ListWiFiKeys(ctx, "tsealed"); err != nil {
+		t.Fatalf("an empty key list needs nothing opened: %v", err)
+	}
+	if _, err := p.Create(ctx, "tsealed2", secrets, lowest); !errors.Is(err, tenant.ErrSecretsUnavailable) {
+		t.Fatalf("create while sealed: %v, want ErrSecretsUnavailable", err)
+	}
+	if _, err := p.Get(ctx, "tsealed2"); !errors.Is(err, tenant.ErrNotFound) {
+		t.Fatalf("a create refused while sealed left a row: %v", err)
+	}
+
+	p.WithSealer(prefixSealer{})
+	got, err := p.Get(ctx, "tsealed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Secrets.Unreadable = false
+	if got.Secrets.TSIG != secrets.TSIG || got.Secrets.State != secrets.State || got.Secrets.LogIngest != secrets.LogIngest ||
+		got.Secrets.LogRead != secrets.LogRead || got.Secrets.DashboardPassword != secrets.DashboardPassword {
+		t.Errorf("secrets changed across a seal: %+v", got.Secrets)
+	}
+	k, err := p.GetAdmissionKey(ctx, "tsealed")
+	if err != nil || k.PSK != "admission-psk" || k.Unreadable {
+		t.Errorf("admission key after unsealing: %+v %v", k, err)
+	}
+}

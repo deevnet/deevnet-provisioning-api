@@ -30,6 +30,7 @@ import (
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/server"
 	"github.com/deevnet/deevnet-provisioning-api/internal/store"
+	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 	"github.com/deevnet/deevnet-provisioning-api/internal/version"
 )
 
@@ -75,25 +76,52 @@ func run(logger *slog.Logger) error {
 		return errors.New("DEEVNET_API_TLS_CERT and DEEVNET_API_TLS_KEY are set together or not at all")
 	}
 
-	startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	w, err := tenantService(startCtx, os.Getenv)
-	cancel()
+	health, err := openbaoClient(os.Getenv)
 	if err != nil {
 		return err
 	}
-	tenants := w.tenants
 	reg := store.New(pool).WithLogger(logger)
-	if w.sealer != nil {
-		reg.WithSealer(w.sealer)
+	cfg := server.Config{
+		Token:      token,
+		AgentToken: os.Getenv("DEEVNET_AGENT_TOKEN"),
+		DB:         pool,
+		Logger:     logger,
 	}
-	if w.tenants != nil {
-		reg.WithSite(w.site)
+	if health != nil {
+		cfg.Secrets = health
 	}
-	if tenants != nil {
-		tenants.Store = reg
-		tenants.Logger = logger
-		logger.Info("serving tenants", "site", tenants.Site.Name,
-			"enrollment", tenants.Enroller != nil, "secrets_sealed", w.sealer != nil)
+
+	// The handler is swapped once the tenant service is built. Until then the
+	// API serves readiness, and /v1 answers 503.
+	var handler atomic.Pointer[http.Handler]
+	serve := func(c server.Config) {
+		h := server.New(c)
+		handler.Store(&h)
+	}
+	// build reads the backend credentials from OpenBao. A sealed or
+	// unreachable OpenBao is waited for (ADR-0042 §2); anything else is a
+	// configuration error and stops the API, as before.
+	build := func() error {
+		startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		w, err := tenantService(startCtx, os.Getenv)
+		if err != nil {
+			return err
+		}
+		if w.sealer != nil {
+			reg.WithSealer(w.sealer)
+		}
+		c := cfg
+		if w.tenants != nil {
+			reg.WithSite(w.site)
+			w.tenants.Store = reg
+			w.tenants.Logger = logger
+			c.Tenants = w.tenants
+			logger.Info("serving tenants", "site", w.tenants.Site.Name,
+				"enrollment", w.tenants.Enroller != nil, "secrets_sealed", w.sealer != nil)
+		}
+		serve(c)
+		return nil
 	}
 
 	// Migrations retry in the background for the same reason the pool dials
@@ -116,15 +144,38 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	cfg.Migrated = migrated.Load
+	switch err := build(); {
+	case errors.Is(err, tenant.ErrSecretsUnavailable):
+		logger.Warn("OpenBao is sealed or unreachable; waiting for it", "err", err)
+		waiting := cfg
+		waiting.SecretsLoaded = func() bool { return false }
+		serve(waiting)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+				err := build()
+				if err == nil {
+					logger.Info("OpenBao opened; serving")
+					return
+				}
+				if !errors.Is(err, tenant.ErrSecretsUnavailable) {
+					logger.Error("building the tenant service", "err", err)
+				}
+			}
+		}()
+	case err != nil:
+		return err
+	}
+
 	srv := &http.Server{
 		Addr: addr,
-		Handler: server.New(server.Config{
-			Token:      token,
-			AgentToken: os.Getenv("DEEVNET_AGENT_TOKEN"),
-			DB:         pool,
-			Logger:     logger,
-			Tenants:    tenants,
-			Migrated:   migrated.Load,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			(*handler.Load()).ServeHTTP(w, r)
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

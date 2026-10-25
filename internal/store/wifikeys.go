@@ -75,7 +75,7 @@ func (p *Postgres) GetWiFiKey(ctx context.Context, tenantName, name string) (ten
 	if err != nil {
 		return tenant.WiFiKey{}, err
 	}
-	return p.openWiFiKey(ctx, k), nil
+	return p.openWiFiKey(ctx, k)
 }
 
 // ListWiFiKeys returns a tenant's keys, oldest first.
@@ -92,7 +92,10 @@ func (p *Postgres) ListWiFiKeys(ctx context.Context, tenantName string) ([]tenan
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, p.openWiFiKey(ctx, k))
+		if k, err = p.openWiFiKey(ctx, k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
 	}
 	return out, rows.Err()
 }
@@ -124,12 +127,15 @@ func (p *Postgres) sealOne(ctx context.Context, plaintext string) (string, error
 	return p.sealer.Seal(ctx, plaintext)
 }
 
-func (p *Postgres) openWiFiKey(ctx context.Context, k tenant.WiFiKey) tenant.WiFiKey {
+func (p *Postgres) openWiFiKey(ctx context.Context, k tenant.WiFiKey) (tenant.WiFiKey, error) {
 	if p.sealer == nil {
-		return k
+		return k, nil
 	}
-	k.PSK, k.Unreadable = p.openOne(ctx, k.PSK, "wifi-key")
-	return k
+	var err error
+	if k.PSK, k.Unreadable, err = p.openOne(ctx, k.PSK, "wifi-key"); err != nil {
+		return tenant.WiFiKey{}, err
+	}
+	return k, nil
 }
 
 // PutAdmissionKey stores the key issued with an admission, replacing an
@@ -159,7 +165,9 @@ func (p *Postgres) GetAdmissionKey(ctx context.Context, name string) (tenant.Adm
 		return tenant.AdmissionKey{}, err
 	}
 	if p.sealer != nil {
-		k.PSK, k.Unreadable = p.openOne(ctx, k.PSK, "admission-key")
+		if k.PSK, k.Unreadable, err = p.openOne(ctx, k.PSK, "admission-key"); err != nil {
+			return tenant.AdmissionKey{}, err
+		}
 	}
 	return k, nil
 }

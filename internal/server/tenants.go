@@ -392,6 +392,10 @@ func (h *tenantHandlers) fail(w http.ResponseWriter, err error) {
 	var inv *tenant.InvalidError
 	var step *tenant.StepError
 	switch {
+	// First: a sealed store can surface inside a failed step, and is still
+	// OpenBao's state rather than the step's.
+	case errors.Is(err, tenant.ErrSecretsUnavailable):
+		writeUnavailable(w)
 	case errors.Is(err, tenant.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
 	case errors.Is(err, tenant.ErrExists):

@@ -628,6 +628,11 @@ var (
 	ErrExists      = errors.New("tenant already exists")
 	ErrExhausted   = errors.New("no free tenant index")
 	ErrFabricInUse = errors.New("the fabric still carries this tenant's zone")
+	// ErrSecretsUnavailable: OpenBao is sealed or cannot be reached, so the
+	// API cannot open or seal a secret (ADR-0042 §3). Nothing is lost, and the
+	// request is refused before anything changes: a stored secret is never
+	// marked unreadable, emptied or re-minted because of it.
+	ErrSecretsUnavailable = errors.New("OpenBao is sealed or unreachable; tenant work waits until it is opened")
 	// ErrNotRedeemable is an enrollment token that was spent, expired, never
 	// existed, or names another tenant. Which one is not said.
 	ErrNotRedeemable = errors.New("enrollment token is not redeemable")
