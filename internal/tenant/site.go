@@ -59,7 +59,7 @@ var reservedNames = []string{
 	"home", "mobile", "mgmt", "dvnt", "dvntm",
 	// the label that holds a tenant's device names (ADR-0039 §4)
 	"device",
-	// the bus name every site's broker answers (ADR-0040 §5)
+	// a site broker's name, mqtt.<site>.deevnet.net, which a tenant named so would own (ADR-0040 §4)
 	"mqtt",
 	// global aliases (Naming standard §4.3)
 	"artifacts",

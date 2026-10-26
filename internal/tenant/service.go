@@ -205,7 +205,7 @@ func validateCreate(req CreateRequest) error {
 		return invalid("name must be 1-8 lowercase alphanumerics starting with a letter")
 	}
 	if Reserved(req.Name) {
-		return invalid("name %q is reserved: it is a site, a global alias or the bus name", req.Name)
+		return invalid("name %q is reserved: it is a site, a global alias or a name the platform keeps", req.Name)
 	}
 	if req.Index != 0 && (req.Index < MinIndex || req.Index > MaxAllocatable) {
 		return invalid("index must be %d-%d", MinIndex, MaxAllocatable)
@@ -993,7 +993,7 @@ func (s *Service) Admit(ctx context.Context, name, mac string) (Admission, error
 		return Admission{}, invalid("name must be 1-8 lowercase alphanumerics starting with a letter")
 	}
 	if Reserved(name) {
-		return Admission{}, invalid("name %q is reserved: it is a site, a global alias or the bus name", name)
+		return Admission{}, invalid("name %q is reserved: it is a site, a global alias or a name the platform keeps", name)
 	}
 	if mac != "" {
 		m, ok := NormalizeMAC(mac)
