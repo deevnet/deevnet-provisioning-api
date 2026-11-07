@@ -15,6 +15,13 @@ One tag covers everything this repository builds: the API, the two writers
   the Pi already trusts and name `mqtt`, `logs` and `grafana`; the key is kept, and a pending
   request stays pending. `cert request` and a new key remain the other way to renew (#43).
 
+### Changed
+
+- The refusal of a reserved tenant name reads "it is a site, a global alias or a name the platform
+  keeps": `mqtt` is a site broker's name, and there is no bus name. Only the message changed; the
+  list is the same. The API needs no redeploy for the rest of this release.
+- The repository is licensed Apache-2.0.
+
 ### Fixed
 
 - `deevnet-kit cert install` reruns the dashboards step after its restarts, so Grafana's log data
