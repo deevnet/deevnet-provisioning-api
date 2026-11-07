@@ -181,8 +181,8 @@ func (k *kit) cmdSelftest() error {
 		fmt.Printf("  ok    %s\n", c.name)
 		res.Passed++
 	}
-	if missing, err := k.uncoveredAddrs(); err == nil && len(missing) > 0 {
-		fmt.Printf("\n  warn  the certificate does not name %v; devices dialling it will fail: sudo deevnet-kit regen-certs\n", missing)
+	if warn, err := k.certWarning(st); err == nil && warn != "" {
+		fmt.Printf("\n  warn  %s\n", warn)
 	}
 	if err := os.MkdirAll(filepath.Dir(k.selftestFile()), 0o755); err == nil {
 		_ = writeJSON(k.selftestFile(), res, 0o644)

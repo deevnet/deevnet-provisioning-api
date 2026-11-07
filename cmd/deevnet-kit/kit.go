@@ -495,16 +495,14 @@ func (k *kit) cmdStatus() error {
 	}
 	fmt.Printf("\n%d broker account(s); deevnet-kit account list\n", len(accts))
 	fmt.Printf("selftest %s\n", k.lastSelftest())
-	// A Deevnet Pi's certificate names no address: a device dials one and
-	// verifies the name.
-	missing, err := k.uncoveredAddrs()
+	// Not a failure of the services, but a device refuses the certificate -
+	// and says only "TLS error".
+	warn, err := k.certWarning(st)
 	if err != nil {
 		return err
 	}
-	if len(missing) > 0 && !st.deevnet() {
-		// Not a failure of the services, but a device dialling this address
-		// will refuse the certificate - and say only "TLS error".
-		fmt.Printf("\nthe certificate does not name %v; a device dialling it will fail - run: sudo deevnet-kit regen-certs\n", missing)
+	if warn != "" {
+		fmt.Printf("\n%s\n", warn)
 	}
 	if bad > 0 {
 		return fmt.Errorf("%d service(s) not active", bad)
@@ -578,7 +576,8 @@ func (k *kit) chown(path, owner, group string) error {
 	return os.Chown(path, uid, gid)
 }
 
-func runCmd(argv ...string) error {
+// runCmd is a variable so a test can see what would run.
+var runCmd = func(argv ...string) error {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Run(); err != nil {

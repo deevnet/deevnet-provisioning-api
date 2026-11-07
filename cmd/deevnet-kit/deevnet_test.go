@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -231,5 +232,139 @@ func TestACardOnItsOwnCAIsUnchanged(t *testing.T) {
 	bridge, _ := os.ReadFile(k.bridgeEnv())
 	if !strings.Contains(string(bridge), "ssl://localhost:8883") {
 		t.Errorf("bridge:\n%s", bridge)
+	}
+}
+
+// becomeDeevnetPi takes a fresh card through request and install.
+func becomeDeevnetPi(t *testing.T, ca testCA) (*kit, string) {
+	t.Helper()
+	k, _ := initKit(t, "tenant=eds\nindex=2\n")
+	var out bytes.Buffer
+	if err := k.cmdCert(&out, []string{"request"}); err != nil {
+		t.Fatal(err)
+	}
+	csr, _ := os.ReadFile(k.requestFile())
+	root := writeTemp(t, "root.pem", ca.rootPEM)
+	if err := k.cmdCert(&out, []string{"install", writeTemp(t, "f.pem", ca.sign(t, csr, edsNames...)), root}); err != nil {
+		t.Fatal(err)
+	}
+	return k, root
+}
+
+// servingCSR is a request for the key this Pi serves with: what the provider
+// re-signs when it renews a certificate for the same key.
+func servingCSR(t *testing.T, k *kit) []byte {
+	t.Helper()
+	b, _ := os.ReadFile(k.serverKeyFile())
+	key, err := parseECKey(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, _ := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	return pemBlock("CERTIFICATE REQUEST", der)
+}
+
+// #43: the provider's same-key renewal installs, as is, on a Deevnet Pi.
+func TestASameKeyRenewalInstalls(t *testing.T) {
+	ca := newTestCA(t)
+	k, root := becomeDeevnetPi(t, ca)
+	keyBefore, _ := os.ReadFile(k.serverKeyFile())
+	certBefore, _ := os.ReadFile(k.serverFile())
+
+	// A request pending for a later key is left as it is.
+	var out bytes.Buffer
+	if err := k.cmdCert(&out, []string{"request"}); err != nil {
+		t.Fatal(err)
+	}
+	renewed := ca.sign(t, servingCSR(t, k), edsNames...)
+	if err := k.cmdCert(&out, []string{"install", writeTemp(t, "r.pem", renewed), root}); err != nil {
+		t.Fatalf("the renewal was refused: %v", err)
+	}
+	if got, _ := os.ReadFile(k.serverFile()); bytes.Equal(got, certBefore) || !bytes.Equal(got, renewed) {
+		t.Error("the renewed certificate is not the one served")
+	}
+	if got, _ := os.ReadFile(k.serverKeyFile()); !bytes.Equal(got, keyBefore) {
+		t.Error("a renewal changed the key")
+	}
+	if _, err := os.Stat(k.requestKeyFile()); err != nil {
+		t.Error("a renewal removed the pending request")
+	}
+	if st, _ := k.loadState(); !st.deevnet() {
+		t.Error("no longer a Deevnet Pi")
+	}
+}
+
+func TestASameKeyRenewalRefuses(t *testing.T) {
+	ca, other := newTestCA(t), newTestCA(t)
+	k, root := becomeDeevnetPi(t, ca)
+	csr := servingCSR(t, k)
+	before, _ := os.ReadFile(k.serverFile())
+	var out bytes.Buffer
+	for why, c := range map[string]struct {
+		full []byte
+		root string
+	}{
+		"another root, given as such": {other.sign(t, csr, edsNames...), writeTemp(t, "o.pem", other.rootPEM)},
+		"another root's, under ours":  {other.sign(t, csr, edsNames...), root},
+		"a name missing":              {ca.sign(t, csr, "mqtt.eds.deevnet.net", "logs.eds.deevnet.net"), root},
+	} {
+		if err := k.cmdCert(&out, []string{"install", writeTemp(t, "f.pem", c.full), c.root}); err == nil {
+			t.Errorf("%s: installed", why)
+		}
+	}
+	if after, _ := os.ReadFile(k.serverFile()); !bytes.Equal(before, after) {
+		t.Error("a refused renewal changed the server certificate")
+	}
+
+	// A card on its own CA takes only a requested key, never the one it serves.
+	card, _ := initKit(t, "tenant=eds\nindex=2\n")
+	err := card.cmdCert(&out, []string{"install", writeTemp(t, "c.pem", ca.sign(t, servingCSR(t, card), edsNames...)), root})
+	if err == nil || !strings.Contains(err.Error(), "no request is pending") {
+		t.Errorf("own CA, serving key: %v", err)
+	}
+}
+
+// #41: install restarts what serves the certificate, then rewrites Grafana's
+// data sources, which name the services by the names it holds.
+func TestInstallRewritesTheDataSources(t *testing.T) {
+	ca := newTestCA(t)
+	k, root := becomeDeevnetPi(t, ca)
+	var ran [][]string
+	saved := runCmd
+	runCmd = func(argv ...string) error { ran = append(ran, argv); return nil }
+	t.Cleanup(func() { runCmd = saved })
+	k.noExec = false
+
+	var out bytes.Buffer
+	if err := k.cmdCert(&out, []string{"install", writeTemp(t, "r.pem", ca.sign(t, servingCSR(t, k), edsNames...)), root}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ran) != 2 || !slices.Contains(ran[0], "grafana") ||
+		strings.Join(ran[1], " ") != "systemctl restart deevnet-kit-dashboards" {
+		t.Errorf("ran %v; want the services restarted, then the dashboards step", ran)
+	}
+}
+
+// #42: a Deevnet Pi is warned about a name its services dial, never about an
+// address, which its certificate names by design.
+func TestCertWarning(t *testing.T) {
+	card, st := initKit(t, "tenant=eds\nindex=2\n")
+	if w, err := card.certWarning(st); err != nil || w != "" {
+		t.Errorf("a fresh card: %q, %v", w, err)
+	}
+
+	ca := newTestCA(t)
+	k, _ := becomeDeevnetPi(t, ca)
+	st, _ = k.loadState()
+	if w, err := k.certWarning(st); err != nil || w != "" {
+		t.Errorf("a Deevnet Pi with every name: %q, %v", w, err)
+	}
+	// One without grafana's name, as a hand-placed file might be.
+	if err := os.WriteFile(k.serverFile(), ca.sign(t, servingCSR(t, k), "mqtt.eds.deevnet.net", "logs.eds.deevnet.net"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := k.certWarning(st)
+	if err != nil || !strings.Contains(w, "grafana.eds.deevnet.net") || strings.Contains(w, "regen-certs") {
+		t.Errorf("a Deevnet Pi missing a name: %q, %v", w, err)
 	}
 }
