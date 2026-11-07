@@ -6,7 +6,7 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
-## Unreleased
+## 0.16.0 (2026-11-07)
 
 ### Added
 
@@ -14,6 +14,13 @@ One tag covers everything this repository builds: the API, the two writers
   `deevnet_certificate` issues for the same key once sixty days remain. It must chain to the root
   the Pi already trusts and name `mqtt`, `logs` and `grafana`; the key is kept, and a pending
   request stays pending. `cert request` and a new key remain the other way to renew (#43).
+
+### Changed
+
+- The refusal of a reserved tenant name reads "it is a site, a global alias or a name the platform
+  keeps": `mqtt` is a site broker's name, and there is no bus name. Only the message changed; the
+  list is the same. The API needs no redeploy for the rest of this release.
+- The repository is licensed Apache-2.0.
 
 ### Fixed
 
