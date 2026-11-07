@@ -85,6 +85,28 @@ func TestSignServerAsksTheOneRoleAndSendsOnlyNames(t *testing.T) {
 	}
 }
 
+// With ServiceCEL the same request goes to the mount's CEL role of that name.
+func TestSignServerThroughTheCELRole(t *testing.T) {
+	b := &bao{answer: `{"data":{"certificate":"LEAF","issuing_ca":"ISSUING","ca_chain":["ISSUING"]}}`}
+	srv := httptest.NewServer(b)
+	t.Cleanup(srv.Close)
+	c, err := New(Config{Addr: srv.URL, RoleID: "r", SecretID: "s", KVMount: "deevnet-api",
+		TransitKey: "tenant-secrets", ServiceMount: "pki-tenant-service", ServiceRole: "tenant-service",
+		ServiceCEL: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SignServer(context.Background(), "CSR", []string{"console.eds.deevnet.net", "console.eds.mobile.deevnet.net"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.paths) != 1 || b.paths[0] != "POST /v1/pki-tenant-service/cel/sign/tenant-service" {
+		t.Fatalf("called %v", b.paths)
+	}
+	if b.bodies[0]["common_name"] != "console.eds.deevnet.net" || b.bodies[0]["alt_names"] != "console.eds.mobile.deevnet.net" || len(b.bodies[0]) != 4 {
+		t.Fatalf("sent %v", b.bodies[0])
+	}
+}
+
 func TestSignServerWithOneNameSendsNoOthers(t *testing.T) {
 	b := &bao{answer: `{"data":{"certificate":"LEAF","issuing_ca":"ISSUING"}}`}
 	c := signingClient(t, b, "pki-tenant-service", "tenant-service")

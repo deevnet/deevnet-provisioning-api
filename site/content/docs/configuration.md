@@ -152,6 +152,7 @@ with them, because a tenant's data sources carry its log read token.
 |---|---|---|
 | `OPENBAO_TENANT_SERVICE_MOUNT` | | the Tenant Service CA's PKI mount in OpenBao, for example `pki-tenant-service`; turns certificates on. It needs `OPENBAO_ADDR`: the CA is in OpenBao, and nowhere else |
 | `OPENBAO_TENANT_SERVICE_ROLE` | `tenant-service` | the one role on that mount the service signs on |
+| `OPENBAO_TENANT_SERVICE_CEL` | `false` | `true` signs through the mount's CEL role of that name (`cel/sign/<role>`), which refuses reserved tenant labels itself (CHG-0059) |
 
 They need no credential of their own. The service's AppRole policy must allow `update` on
 `<mount>/sign/<role>` and nothing else on the mount.

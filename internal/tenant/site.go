@@ -52,8 +52,9 @@ func ValidName(name string) bool { return nameRE.MatchString(name) }
 // is the second label of its site-less names, <service>.<tenant>.<root>, so a
 // tenant named for a site would hold that site's own names, and one named for
 // a global alias or the bus would hold those. The list grows with the sites
-// and aliases; the signing role allows any name two labels under the root, so
-// this is what keeps a tenant off them.
+// and aliases. The classic signing role allows any name two labels under the
+// root; the CEL role (CHG-0059) refuses these labels too, from its own copy
+// of this list, which the openbao role writes and must keep in step.
 var reservedNames = []string{
 	// sites, and the zones and environments retired before them
 	"home", "mobile", "mgmt", "dvnt", "dvntm",
