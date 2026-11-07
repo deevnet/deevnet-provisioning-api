@@ -3,3 +3,6 @@ bin/
 site/public/
 site/resources/
 .hugo_build.lock
+# go build output in the tree; make build writes bin/
+/deevnet-kit
+/cmd/deevnet-kit/deevnet-kit
