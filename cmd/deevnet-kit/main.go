@@ -56,7 +56,8 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
                                        Tenant Service CA
   deevnet-kit cert install FULLCHAIN ROOT
                                        install what the Tenant Service CA signed; from then on
-                                       everything here trusts the Deevnet Root
+                                       everything here trusts the Deevnet Root. Also takes a
+                                       renewal for the key already serving
   deevnet-kit render                   rewrite the broker and log store config from state
   deevnet-kit dashboards               ensure the tenant's Grafana organisation (each boot)
   deevnet-kit selftest                 prove the card end to end: TLS, a device log over

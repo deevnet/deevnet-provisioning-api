@@ -6,6 +6,24 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Added
+
+- `deevnet-kit cert install` takes a renewal for the key a Deevnet Pi already serves: what
+  `deevnet_certificate` issues for the same key once sixty days remain. It must chain to the root
+  the Pi already trusts and name `mqtt`, `logs` and `grafana`; the key is kept, and a pending
+  request stays pending. `cert request` and a new key remain the other way to renew (#43).
+
+### Fixed
+
+- `deevnet-kit cert install` reruns the dashboards step after its restarts, so Grafana's log data
+  sources name `logs.<tenant>.deevnet.net` rather than `localhost`, which the certificate does not
+  hold (#41).
+- `deevnet-kit status` and `selftest` no longer warn on a Deevnet Pi that the certificate names
+  none of its addresses, and suggest `regen-certs`, which refuses there. They warn instead when it
+  is missing a name the Pi's services dial (#42).
+
 ## 0.15.0 (2026-10-25)
 
 ### Added

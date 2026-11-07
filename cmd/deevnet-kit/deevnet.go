@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -122,6 +123,11 @@ func (k *kit) certRequest(w io.Writer) error {
 // requested key, it chains to the root given, and it names every service
 // here. Then it becomes the server certificate, the root becomes what every
 // service trusts, and the card is a Deevnet Pi.
+//
+// On a Deevnet Pi it also takes a renewal for the key already serving: what
+// the provider issues for the same key once sixty days remain (#43). Then the
+// root must be the one the Pi already trusts, the key is not touched, and a
+// pending request stays pending.
 func (k *kit) certInstall(fullchainPath, rootPath string) error {
 	st, err := k.loadState()
 	if err != nil {
@@ -143,21 +149,51 @@ func (k *kit) certInstall(fullchainPath, rootPath string) error {
 	if err != nil || len(roots) != 1 || !roots[0].IsCA {
 		return fmt.Errorf("%s must be one CA certificate: the Deevnet Root", rootPath)
 	}
-	keyPEM, err := os.ReadFile(k.requestKeyFile())
-	if errors.Is(err, os.ErrNotExist) {
-		return errors.New("no request is pending: run deevnet-kit cert request, and have that signed")
-	}
-	if err != nil {
-		return err
-	}
-	key, err := parseECKey(keyPEM)
-	if err != nil {
-		return err
-	}
 	leaf := certs[0]
-	pub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
-	if !ok || !pub.Equal(&key.PublicKey) {
-		return errors.New("the certificate is not for the pending request's key")
+	pub, _ := leaf.PublicKey.(*ecdsa.PublicKey)
+	forKey := func(file string) ([]byte, bool, error) {
+		b, err := os.ReadFile(file)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		key, err := parseECKey(b)
+		if err != nil {
+			return nil, false, err
+		}
+		return b, pub != nil && pub.Equal(&key.PublicKey), nil
+	}
+	keyPEM, pending, err := forKey(k.requestKeyFile())
+	if err != nil {
+		return err
+	}
+	renewal := false
+	if !pending {
+		if st.deevnet() {
+			if _, serving, err := forKey(k.serverKeyFile()); err != nil {
+				return err
+			} else if serving {
+				trusted, err := os.ReadFile(k.caFile())
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(bytes.TrimSpace(trusted), bytes.TrimSpace(rootPEM)) {
+					return fmt.Errorf("a renewal keeps the root this Pi trusts, and %s is another", rootPath)
+				}
+				renewal = true
+			}
+		}
+		switch {
+		case renewal:
+		case keyPEM == nil && st.deevnet():
+			return errors.New("the certificate is not for the key this Pi serves, and no request is pending: run deevnet-kit cert request, and have that signed")
+		case keyPEM == nil:
+			return errors.New("no request is pending: run deevnet-kit cert request, and have that signed")
+		default:
+			return errors.New("the certificate is not for the pending request's key")
+		}
 	}
 	rootPool, inter := x509.NewCertPool(), x509.NewCertPool()
 	rootPool.AddCert(roots[0])
@@ -177,6 +213,15 @@ func (k *kit) certInstall(fullchainPath, rootPath string) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("the certificate does not verify against the root for %s: ask for it with names %s",
 			strings.Join(missing, ", "), strings.Join(kitServices[1:], ", "))
+	}
+
+	if renewal {
+		if err := writeFile(k.serverFile(), fullchain, 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("renewed: %s, valid to %s, for the key this Pi already serves\n",
+			leaf.Subject.CommonName, leaf.NotAfter.Format("2006-01-02"))
+		return k.restartForCert()
 	}
 
 	// The card's own CA is kept, so going back is a copy.
@@ -215,10 +260,56 @@ func (k *kit) certInstall(fullchainPath, rootPath string) error {
 	fmt.Printf("installed: %s, valid to %s; this Pi now answers as %s\n",
 		leaf.Subject.CommonName, leaf.NotAfter.Format("2006-01-02"), strings.Join(leaf.DNSNames, ", "))
 	fmt.Println("an app's kit.env changes: deevnet-kit export again, with deevnet-root-ca.pem")
+	return k.restartForCert()
+}
+
+// restartForCert restarts what serves or dials the certificate, then writes
+// Grafana's log data sources again: they name logs.<tenant>.deevnet.net on a
+// Deevnet Pi and localhost on the card's own CA, so the move between the two
+// leaves them dialling a name the certificate does not hold (#41). The
+// dashboards unit waits for Grafana itself.
+func (k *kit) restartForCert() error {
 	if k.noExec {
 		return nil
 	}
-	return runCmd("systemctl", "restart", "mosquitto", "vmauth", "grafana", "deevnet-log-bridge")
+	if err := runCmd("systemctl", "restart", "mosquitto", "vmauth", "grafana", "deevnet-log-bridge"); err != nil {
+		return err
+	}
+	return runCmd("systemctl", "restart", "deevnet-kit-dashboards")
+}
+
+// certWarning is what status and selftest say about the server certificate,
+// or "" when there is nothing to say. On the card's own CA a device dials an
+// address, so each address must be named. On a Deevnet Pi a device dials a
+// name and the certificate holds no address by design, so what matters is
+// that it names every service here (#42).
+func (k *kit) certWarning(st state) (string, error) {
+	if !st.deevnet() {
+		missing, err := k.uncoveredAddrs()
+		if err != nil || len(missing) == 0 {
+			return "", err
+		}
+		return fmt.Sprintf("the certificate does not name %v; a device dialling it will fail: sudo deevnet-kit regen-certs", missing), nil
+	}
+	b, err := os.ReadFile(k.serverFile())
+	if err != nil {
+		return "", err
+	}
+	certs, err := parseCerts(b)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", k.serverFile(), err)
+	}
+	var missing []string
+	for _, s := range kitServices {
+		if n := st.name(s); certs[0].VerifyHostname(n) != nil {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("the certificate does not name %s; run deevnet-kit cert request, have it signed with names %s, then cert install",
+		strings.Join(missing, ", "), strings.Join(kitServices[1:], ", ")), nil
 }
 
 const hostsBegin, hostsEnd = "# BEGIN deevnet-kit", "# END deevnet-kit"
