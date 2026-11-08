@@ -61,8 +61,11 @@ func (st state) appHost(svc, mdns string) string {
 }
 
 func (st state) caExportName() string {
-	if st.deevnet() {
+	switch {
+	case st.deevnet():
 		return rootExportName
+	case st.owner():
+		return ownerRootExportName
 	}
 	return kitCAExportName
 }
@@ -224,8 +227,9 @@ func (k *kit) certInstall(fullchainPath, rootPath string) error {
 		return k.restartForCert()
 	}
 
-	// The card's own CA is kept, so going back is a copy.
-	if !st.deevnet() {
+	// The card's own CA is kept, so going back is a copy. On the owner's
+	// root, pki switch kept what it replaced as previous-root.pem.
+	if st.PKI == "" {
 		if ca, err := os.ReadFile(k.caFile()); err == nil {
 			if err := writeFile(k.cardCAFile(), ca, 0o644); err != nil {
 				return err
@@ -284,6 +288,9 @@ func (k *kit) restartForCert() error {
 // name and the certificate holds no address by design, so what matters is
 // that it names every service here (#42).
 func (k *kit) certWarning(st state) (string, error) {
+	if st.owner() {
+		return k.ownerCertWarning()
+	}
 	if !st.deevnet() {
 		missing, err := k.uncoveredAddrs()
 		if err != nil || len(missing) == 0 {
@@ -334,11 +341,15 @@ func (k *kit) writeHosts(st state) error {
 			keep = append(keep, line)
 		}
 	}
-	var names []string
-	for _, s := range kitServices {
-		names = append(names, st.name(s))
+	// Only a Deevnet Pi's services dial names that need mapping; elsewhere
+	// they dial localhost, and the block is removed.
+	if st.deevnet() {
+		var names []string
+		for _, s := range kitServices {
+			names = append(names, st.name(s))
+		}
+		keep = append(keep, hostsBegin, "127.0.0.1 "+strings.Join(names, " "), hostsEnd)
 	}
-	keep = append(keep, hostsBegin, "127.0.0.1 "+strings.Join(names, " "), hostsEnd)
 	return writeFile(k.hostsFile(), []byte(strings.Join(keep, "\n")+"\n"), 0o644)
 }
 

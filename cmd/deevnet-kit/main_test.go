@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -97,7 +98,7 @@ func TestInitRunsOnce(t *testing.T) {
 	}
 	after, _ := os.ReadFile(k.caFile())
 	st2, _ := k.loadState()
-	if string(before) != string(after) || st2 != st {
+	if string(before) != string(after) || !reflect.DeepEqual(st2, st) {
 		t.Fatal("a second init changed the CA or the state; it must be a no-op")
 	}
 }
