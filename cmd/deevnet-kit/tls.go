@@ -173,7 +173,12 @@ func (k *kit) cmdRegenCerts() error {
 	if st.deevnet() {
 		return errors.New("this is a Deevnet Pi: renew with deevnet-kit cert request, have it signed, then cert install")
 	}
-	if err := k.issueServerCert(); err != nil {
+	// On the owner's root, the owner's issuing CA on this Pi renews it.
+	issue := k.issueServerCert
+	if st.owner() {
+		issue = func() error { return k.issueOwnerServerCert(os.Stdout, st) }
+	}
+	if err := issue(); err != nil {
 		return err
 	}
 	if k.noExec {

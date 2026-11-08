@@ -24,7 +24,9 @@
 //   - The CA is the card's own, generated on first boot, until a Deevnet
 //     certificate is installed (cert install, ADR-0041 §2). A Deevnet Pi's
 //     certificate is the Tenant Service CA's, for the tenant's site-less
-//     names, and it trusts the Deevnet Root.
+//     names, and it trusts the Deevnet Root. An owner leaving Deevnet makes
+//     a PKI of their own with pki init, and moves to it with pki switch
+//     (ADR-0041 §3, §4).
 //   - Grafana's organisation is written by the same package the API uses
 //     (internal/backend/grafana), so its data sources have the same UIDs and a
 //     dashboard moves unchanged. The Pi's owner also holds the admin login.
@@ -51,13 +53,24 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
   deevnet-kit names [list | set N... | add N... | rm N...]
                                        extra names and addresses for the server certificate
   deevnet-kit regen-certs              reissue the server certificate for this hostname and
-                                       those names, from the card's own CA
+                                       those names, from the card's own CA, or your own once
+                                       pki switch has run
   deevnet-kit cert request             a Deevnet Pi: a new key, and its signing request for the
                                        Tenant Service CA
   deevnet-kit cert install FULLCHAIN ROOT
                                        install what the Tenant Service CA signed; from then on
                                        everything here trusts the Deevnet Root. Also takes a
                                        renewal for the key already serving
+  deevnet-kit pki init --org ORG [--domain D]...
+                                       a PKI of your own: a root on an encrypted USB stick, and
+                                       an issuing CA on this Pi. Nothing served changes yet;
+                                       export hands out both roots for your devices
+  deevnet-kit pki switch               once they hold both: this Pi serves a certificate from
+                                       your CA, and trusts your root
+  deevnet-kit pki enroll DEVICE --out DIR [--csr FILE]
+                                       a device's certificate from your CA
+  deevnet-kit pki issuing [--org ORG] [--domain D]...
+                                       a new issuing CA from the root on the stick: a new card
   deevnet-kit render                   rewrite the broker and log store config from state
   deevnet-kit dashboards               ensure the tenant's Grafana organisation (each boot)
   deevnet-kit selftest                 prove the card end to end: TLS, a device log over
@@ -98,6 +111,8 @@ func run(args []string) error {
 		return k.cmdNames(args[1:])
 	case "cert":
 		return k.cmdCert(os.Stdout, args[1:])
+	case "pki":
+		return k.cmdPKI(os.Stdout, args[1:])
 	case "regen-certs":
 		return k.cmdRegenCerts()
 	case "render":

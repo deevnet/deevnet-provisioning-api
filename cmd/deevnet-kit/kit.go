@@ -69,18 +69,25 @@ type state struct {
 	DashboardPassword    string `json:"dashboard_password"`
 	DashboardOrg         int    `json:"dashboard_org"`
 
-	// PKI is empty while the card's own CA signs its certificate, and
-	// "deevnet" once a Tenant Service CA certificate is installed
-	// (deevnet-kit cert install, ADR-0041 §2).
+	// PKI is empty while the card's own CA signs its certificate, "deevnet"
+	// once a Tenant Service CA certificate is installed (deevnet-kit cert
+	// install, ADR-0041 §2), and "owner" once the owner's own CA signs it
+	// (deevnet-kit pki switch, ADR-0041 §3).
 	PKI string `json:"pki,omitempty"`
+
+	// The owner's own PKI, from pki init: the organization its CAs carry,
+	// and the domains its issuing CA may name.
+	OwnerOrg     string   `json:"owner_org,omitempty"`
+	OwnerDomains []string `json:"owner_domains,omitempty"`
 }
 
 // kit holds the paths. root is empty on a Pi and a temporary directory in
 // tests; nothing else about the program changes between the two.
 type kit struct {
 	root    string
-	noOwner bool // tests: skip chown, the users do not exist
-	noExec  bool // tests: do not run systemctl or deevnet-log-user
+	noOwner bool   // tests: skip chown, the users do not exist
+	noExec  bool   // tests: do not run systemctl or deevnet-log-user
+	tool    string // tests: the ceremony tool, in place of the image's
 }
 
 func newKit(root string) *kit { return &kit{root: root} }
@@ -392,13 +399,23 @@ func (k *kit) cmdEnv(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(w, kitEnv(st, host(), creds))
+	caName, _, err := k.exportCA(st)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, kitEnvCA(st, host(), creds, caName))
 	return err
 }
 
 // kitEnv is the app's whole view of this Pi. The names are the tenant guide's;
 // the same file built from Terraform outputs points the same app at Deevnet.
 func kitEnv(st state, h string, app appCreds) string {
+	return kitEnvCA(st, h, app, st.caExportName())
+}
+
+// kitEnvCA is kitEnv with the CA file export writes beside it, which between
+// pki init and pki switch is the trust bundle.
+func kitEnvCA(st state, h string, app appCreds, caName string) string {
 	return fmt.Sprintf(`# deevnet-kit - tenant %s on %s
 # The same names, filled from terraform outputs, point this app at Deevnet.
 DEEVNET_TENANT=%s
@@ -410,7 +427,7 @@ LOG_INGEST_TOKEN=%s
 LOG_READ_TOKEN=%s
 LOG_SELECT_HEADER=X-Deevnet-Partition
 LOG_DEVICE_PARTITION=%d-2
-`, st.Tenant, h, st.Tenant, st.appHost("mqtt", h), brokerPort, st.caExportName(), st.appHost("logs", h), logPort,
+`, st.Tenant, h, st.Tenant, st.appHost("mqtt", h), brokerPort, caName, st.appHost("logs", h), logPort,
 		st.IngestToken, st.ReadToken, st.Index) + appEnv(app) + dashboardEnv(st, st.appHost("grafana", h))
 }
 
@@ -435,12 +452,12 @@ func (k *kit) cmdExport(args []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	ca, err := os.ReadFile(k.caFile())
+	caName, ca, err := k.exportCA(st)
 	if err != nil {
 		return err
 	}
-	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, st.caExportName())
-	if err := writeFile(envPath, []byte(kitEnv(st, host(), creds)), 0o600); err != nil {
+	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, caName)
+	if err := writeFile(envPath, []byte(kitEnvCA(st, host(), creds, caName)), 0o600); err != nil {
 		return err
 	}
 	if err := writeFile(caPath, ca, 0o644); err != nil {
@@ -468,10 +485,16 @@ func (k *kit) cmdStatus() error {
 	}
 	h := host()
 	pki := "the card's own CA"
-	if st.deevnet() {
+	switch {
+	case st.deevnet():
 		pki = "the Deevnet Root (a Deevnet Pi)"
+	case st.owner():
+		pki = "your own root (" + st.OwnerOrg + ")"
 	}
 	fmt.Printf("tenant   %s (index %d); trusts %s\n", st.Tenant, st.Index, pki)
+	if !st.owner() && k.ownerReady() {
+		fmt.Printf("         your own CA is ready: export hands out %s; pki switch once every device holds it\n", trustBundleName)
+	}
 	fmt.Printf("broker   mqtts://%s:%d\n", st.appHost("mqtt", h), brokerPort)
 	fmt.Printf("logs     https://%s:%d  (device logs: X-Deevnet-Partition: %d-2)\n", st.appHost("logs", h), logPort, st.Index)
 	if st.DashboardOrg > 0 {

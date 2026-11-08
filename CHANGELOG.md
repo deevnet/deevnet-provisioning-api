@@ -6,6 +6,26 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Added
+
+- **A PKI of your own** (`deevnet-kit pki`, CHG-0056, ADR-0041 §3 and §4), the starter kit for
+  leaving Deevnet. It runs the ceremony tools from `deevnet.mgmt` (`deevnet-pki-owner.sh`), which
+  the image must carry at `/usr/local/sbin`.
+  - `pki init --org ORG [--domain D]...` makes the owner's root on an encrypted USB stick and an
+    issuing CA on the Pi. Nothing served changes. Until the switch, `export` and `env` hand out
+    `trust-bundle.pem`, the root trusted now and the owner's, for every device and computer.
+  - `pki switch` reissues the Pi's certificate from the owner's CA and moves every service onto
+    the owner's root. It keeps the root it replaced as `previous-root.pem`. On a Deevnet Pi it
+    removes the hosts mapping, and an extra name the owner's CA can't sign is left out and listed.
+  - `pki enroll DEVICE --out DIR [--csr FILE]` issues a device's certificate.
+  - `pki issuing` makes a new card's issuing CA from the root on the stick.
+  - Once on the owner's root, `regen-certs` renews from the owner's CA on the Pi alone.
+  - The server certificate names `<host>.local`, `localhost`, loopback, the Pi's private
+    addresses, and extra names under `.local` or the owner's domains. The bare host name is left
+    out, because no name constraint covers a single label.
+
 ## 0.17.0 (2026-11-07)
 
 ### Added
