@@ -54,6 +54,18 @@ const (
 
 func (st state) owner() bool { return st.PKI == pkiOwner }
 
+// tenantDomain is where the tenant's site-less names are: <tenant>.deevnet.net.
+func (st state) tenantDomain() string { return st.Tenant + "." + rootDomain }
+
+// keepsTenantNames: on the owner's root, the Pi still answers to the tenant's
+// names, because the owner's CA may sign them. A device that verified
+// mqtt.<tenant>.deevnet.net on Deevnet's certificate verifies the same name
+// on the owner's, so across pki switch it changes only the root it trusts
+// (ADR-0041 §4). It moves to names of the owner's own at its own pace.
+func (st state) keepsTenantNames() bool {
+	return st.owner() && slices.Contains(st.OwnerDomains, st.tenantDomain())
+}
+
 func (k *kit) ownerDir() string         { return filepath.Join(k.etc(), "owner-ca") }
 func (k *kit) previousRootFile() string { return filepath.Join(k.tlsDir(), "previous-root.pem") }
 
@@ -130,6 +142,13 @@ func (k *kit) pkiCA(w io.Writer, mode string, args []string) error {
 	}
 	if len(domains) == 0 && mode == "issuing" {
 		domains = st.OwnerDomains
+	}
+	// A Deevnet Pi's devices verify its tenant's names: the owner's CA may
+	// sign them too, so they survive the switch. A new card for such a Pi
+	// (pki issuing) is given the domain by --domain, as it is not a Deevnet
+	// Pi itself.
+	if st.deevnet() && !slices.Contains(domains, st.tenantDomain()) {
+		domains = append(domains, st.tenantDomain())
 	}
 	if k.ownerReady() {
 		return fmt.Errorf("an issuing CA of yours is already on this Pi (%s); to replace it, move that directory aside first", k.ownerDir())
@@ -236,8 +255,8 @@ func (k *kit) pkiSwitch(w io.Writer) error {
 	if err := writeJSON(k.stateFile(), st, 0o600); err != nil {
 		return err
 	}
-	// A Deevnet Pi's services dialled its Deevnet names, mapped to loopback;
-	// on the owner's root they dial localhost, which the certificate names.
+	// The services dial the tenant's names, mapped to loopback, while the
+	// certificate keeps them, and localhost otherwise.
 	if err := k.writeHosts(st); err != nil {
 		return err
 	}
@@ -245,8 +264,11 @@ func (k *kit) pkiSwitch(w io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(w, "switched: this Pi serves a certificate from your issuing CA, and trusts your root (%s)\n", st.OwnerOrg)
-	if was == pkiDeevnet {
-		fmt.Fprintln(w, "it is no longer a Deevnet Pi: its Deevnet names are not in the new certificate")
+	switch {
+	case st.keepsTenantNames():
+		fmt.Fprintf(w, "it still answers to its names under %s, now from your CA: a device given the bundle keeps working\n", st.tenantDomain())
+	case was == pkiDeevnet:
+		fmt.Fprintf(w, "it no longer answers to its names under %s\n", st.tenantDomain())
 	}
 	fmt.Fprintf(w, "once every device holds your root: sudo deevnet-kit export DIR, and give them %s alone\n", ownerRootExportName)
 	return k.restartForCert()
@@ -264,7 +286,7 @@ func (k *kit) issueOwnerServerCert(w io.Writer, st state) error {
 	if err != nil {
 		return err
 	}
-	names, dropped := ownerServerNames(h, localAddrs(), extra, st.OwnerDomains)
+	names, dropped := ownerServerNames(h, localAddrs(), extra, st.OwnerDomains, st.tenantDomain())
 	for _, n := range dropped {
 		fmt.Fprintf(w, "left out %s: your CA signs only .local names, localhost, private addresses and %s\n",
 			n, orNone(st.OwnerDomains))
@@ -315,15 +337,21 @@ func (k *kit) issueOwnerServerCert(w io.Writer, st state) error {
 }
 
 // ownerServerNames is what the owner's CA is asked to name: <host>.local,
-// localhost for the services here, loopback, the Pi's private addresses, and
-// the extra names it may sign for. The bare host name is not among them: no
-// name constraint covers a single label, so the CA would refuse it.
-func ownerServerNames(h string, addrs []net.IP, extra, domains []string) (names, dropped []string) {
+// localhost for the services here, loopback, the Pi's private addresses, the
+// kit's services under the tenant's domain when the CA may sign it, and the
+// extra names it may sign for. The bare host name is not among them: no name
+// constraint covers a single label, so the CA would refuse it.
+func ownerServerNames(h string, addrs []net.IP, extra, domains []string, tenantDomain string) (names, dropped []string) {
 	h = strings.TrimSuffix(h, ".local")
 	names = []string{h + ".local", "localhost", "127.0.0.1", "::1"}
 	add := func(n string) {
 		if !slices.Contains(names, n) {
 			names = append(names, n)
+		}
+	}
+	if slices.Contains(domains, tenantDomain) {
+		for _, s := range kitServices {
+			add(s + "." + tenantDomain)
 		}
 	}
 	for _, ip := range addrs {

@@ -225,8 +225,10 @@ func TestANewCardFromTheStick(t *testing.T) {
 	}
 }
 
-// A Deevnet Pi leaves too (V8): its Deevnet names go, and so does the hosts
-// block that mapped them.
+// A Deevnet Pi leaves too (V8): its devices verify mqtt.<tenant>.deevnet.net,
+// and the owner's CA may sign that, so the name survives the switch. A device
+// given the bundle before it verifies the same name on both certificates, and
+// only its root changes. A Deevnet name outside the tenant's is still left out.
 func TestADeevnetPiLeaves(t *testing.T) {
 	tools := ownerTools(t)
 	ca := newTestCA(t)
@@ -236,37 +238,82 @@ func TestADeevnetPiLeaves(t *testing.T) {
 	t.Setenv("PKI_OWNER_ROOT_PASS", "test-root-passphrase")
 	t.Setenv("DEEVNET_PKI_OWNER_TEST_PLAIN_KEYS", "I know this is only a test")
 	stick := t.TempDir()
-	if err := k.writeNames([]string{"console.eds.deevnet.net", "192.168.7.20"}); err != nil {
+	if err := k.writeNames([]string{"console.eds.deevnet.net", "grafana.mobile.deevnet.net", "192.168.7.20"}); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	if err := k.cmdPKI(&out, []string{"init", "--org", "EdS", "--keys", stick}); err != nil {
 		t.Fatal(err)
 	}
-	// Between the two, export bundles the Deevnet Root with the owner's.
+	st, _ := k.loadState()
+	if !slices.Equal(st.OwnerDomains, []string{"eds.deevnet.net"}) {
+		t.Fatalf("a Deevnet Pi's owner CA must be permitted its tenant's names: %v", st.OwnerDomains)
+	}
+	issuing := parseOne(t, mustRead(t, filepath.Join(k.ownerDir(), ownerIssuingCert)))
+	if !slices.Contains(issuing.PermittedDNSDomains, "eds.deevnet.net") || slices.Contains(issuing.PermittedDNSDomains, "deevnet.net") {
+		t.Fatalf("the issuing CA permits %v", issuing.PermittedDNSDomains)
+	}
+
+	// Step 1: the device is given the bundle while the Deevnet certificate serves.
 	dir := t.TempDir()
 	if err := k.cmdExport([]string{dir}); err != nil {
 		t.Fatal(err)
 	}
-	bundle := string(mustRead(t, filepath.Join(dir, trustBundleName)))
-	if !strings.Contains(bundle, strings.TrimSpace(string(ca.rootPEM))) || strings.Count(bundle, "BEGIN CERTIFICATE") != 2 {
-		t.Errorf("the bundle does not hold the Deevnet Root and the owner's:\n%s", bundle)
+	bundlePEM := string(mustRead(t, filepath.Join(dir, trustBundleName)))
+	if !strings.Contains(bundlePEM, strings.TrimSpace(string(ca.rootPEM))) || strings.Count(bundlePEM, "BEGIN CERTIFICATE") != 2 {
+		t.Fatalf("the bundle does not hold the Deevnet Root and the owner's:\n%s", bundlePEM)
 	}
+	bundle := pool(t, filepath.Join(dir, trustBundleName))
+	deevnetInter := x509.NewCertPool()
+	deevnetInter.AddCert(ca.issuing)
+	leaf, _ := serverCert(t, k)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: bundle, Intermediates: deevnetInter, DNSName: "mqtt.eds.deevnet.net"}); err != nil {
+		t.Fatalf("before the switch, the device's name does not verify on the bundle: %v", err)
+	}
+
+	// Step 2.
 	if err := k.cmdPKI(&out, []string{"switch"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "left out console.eds.deevnet.net") || !strings.Contains(out.String(), "no longer a Deevnet Pi") {
-		t.Errorf("switch did not say what it left out:\n%s", out.String())
+	if !strings.Contains(out.String(), "still answers to its names under eds.deevnet.net") ||
+		!strings.Contains(out.String(), "left out grafana.mobile.deevnet.net") {
+		t.Errorf("switch said:\n%s", out.String())
 	}
-	leaf, _ := serverCert(t, k)
-	if slices.Contains(leaf.DNSNames, "console.eds.deevnet.net") || !slices.ContainsFunc(leaf.IPAddresses, net.ParseIP("192.168.7.20").Equal) {
+	st, _ = k.loadState()
+	if !st.keepsTenantNames() {
+		t.Fatal("the state does not keep the tenant's names")
+	}
+	ownerInter := pool(t, filepath.Join(k.ownerDir(), ownerIssuingCert))
+	leaf, trusted := serverCert(t, k)
+	for _, name := range []string{"mqtt.eds.deevnet.net", "logs.eds.deevnet.net", "grafana.eds.deevnet.net", "console.eds.deevnet.net"} {
+		// The same bundle and the same name, after the switch.
+		if _, err := leaf.Verify(x509.VerifyOptions{Roots: bundle, Intermediates: ownerInter, DNSName: name}); err != nil {
+			t.Errorf("after the switch, %s does not verify on the bundle: %v", name, err)
+		}
+		if _, err := leaf.Verify(x509.VerifyOptions{Roots: trusted, Intermediates: ownerInter, DNSName: name}); err != nil {
+			t.Errorf("what the services trust does not verify %s: %v", name, err)
+		}
+	}
+	if slices.Contains(leaf.DNSNames, "grafana.mobile.deevnet.net") || !slices.ContainsFunc(leaf.IPAddresses, net.ParseIP("192.168.7.20").Equal) {
 		t.Errorf("names %v, addresses %v", leaf.DNSNames, leaf.IPAddresses)
 	}
 	if prev := mustRead(t, k.previousRootFile()); !bytes.Equal(prev, ca.rootPEM) {
 		t.Error("the Deevnet Root was not kept as the previous root")
 	}
-	if hosts := string(mustRead(t, k.hostsFile())); strings.Contains(hosts, "deevnet.net") {
-		t.Errorf("the Deevnet names are still mapped:\n%s", hosts)
+	if hosts := string(mustRead(t, k.hostsFile())); !strings.Contains(hosts, "127.0.0.1 mqtt.eds.deevnet.net logs.eds.deevnet.net grafana.eds.deevnet.net") {
+		t.Errorf("the services' names are not mapped:\n%s", hosts)
+	}
+	if bridge := string(mustRead(t, k.bridgeEnv())); !strings.Contains(bridge, "ssl://mqtt.eds.deevnet.net:8883") {
+		t.Errorf("the bridge does not dial the kept name:\n%s", bridge)
+	}
+	// Step 3: the owner's root alone, and an app's env keeps the same hosts.
+	dir = t.TempDir()
+	if err := k.cmdExport([]string{dir}); err != nil {
+		t.Fatal(err)
+	}
+	if env := string(mustRead(t, filepath.Join(dir, "kit.env"))); !strings.Contains(env, "MQTT_HOST=mqtt.eds.deevnet.net") ||
+		!strings.Contains(env, "MQTT_CA_FILE="+ownerRootExportName) {
+		t.Errorf("kit.env after the switch:\n%s", env)
 	}
 }
 
@@ -291,7 +338,7 @@ func TestPKIRefusesBeforeTheTool(t *testing.T) {
 func TestOwnerServerNames(t *testing.T) {
 	addrs := []net.IP{net.ParseIP("192.168.1.50"), net.ParseIP("203.0.113.9"), net.ParseIP("fd00::5")}
 	extra := []string{"pi.home.example.com", "home.example.com", "mqtt.eds.deevnet.net", "10.1.2.3", "8.8.8.8", "other.local", "evilhome.example.com"}
-	names, dropped := ownerServerNames("mabellpi", addrs, extra, []string{"home.example.com"})
+	names, dropped := ownerServerNames("mabellpi", addrs, extra, []string{"home.example.com"}, "mabell.deevnet.net")
 	want := []string{"mabellpi.local", "localhost", "127.0.0.1", "::1", "192.168.1.50", "fd00::5",
 		"pi.home.example.com", "home.example.com", "10.1.2.3", "other.local"}
 	if !slices.Equal(names, want) {
@@ -299,6 +346,14 @@ func TestOwnerServerNames(t *testing.T) {
 	}
 	if !slices.Equal(dropped, []string{"mqtt.eds.deevnet.net", "8.8.8.8", "evilhome.example.com"}) {
 		t.Errorf("dropped %v", dropped)
+	}
+	// With the tenant's domain permitted, the kit's services keep their names.
+	names, dropped = ownerServerNames("mabellpi", nil, []string{"mqtt.eds.deevnet.net", "www.mabell.deevnet.net"},
+		[]string{"mabell.deevnet.net"}, "mabell.deevnet.net")
+	want = []string{"mabellpi.local", "localhost", "127.0.0.1", "::1",
+		"mqtt.mabell.deevnet.net", "logs.mabell.deevnet.net", "grafana.mabell.deevnet.net", "www.mabell.deevnet.net"}
+	if !slices.Equal(names, want) || !slices.Equal(dropped, []string{"mqtt.eds.deevnet.net"}) {
+		t.Errorf("names %v, dropped %v", names, dropped)
 	}
 }
 

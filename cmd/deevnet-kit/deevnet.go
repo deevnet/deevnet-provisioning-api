@@ -45,7 +45,7 @@ func (st state) deevnet() bool { return st.PKI == pkiDeevnet }
 // name is what this Pi's own services dial for svc: its Deevnet name, mapped
 // to loopback, on a Deevnet Pi, and localhost on its own CA.
 func (st state) name(svc string) string {
-	if st.deevnet() {
+	if st.deevnet() || st.keepsTenantNames() {
 		return svc + "." + st.Tenant + "." + rootDomain
 	}
 	return "localhost"
@@ -54,7 +54,7 @@ func (st state) name(svc string) string {
 // appHost is what an app or a device dials for svc: the Deevnet name, which
 // the network's DNS answers, or the Pi's mDNS name on its own CA.
 func (st state) appHost(svc, mdns string) string {
-	if st.deevnet() {
+	if st.deevnet() || st.keepsTenantNames() {
 		return st.name(svc)
 	}
 	return mdns
@@ -341,9 +341,10 @@ func (k *kit) writeHosts(st state) error {
 			keep = append(keep, line)
 		}
 	}
-	// Only a Deevnet Pi's services dial names that need mapping; elsewhere
-	// they dial localhost, and the block is removed.
-	if st.deevnet() {
+	// Only a Pi that answers to its tenant's names - a Deevnet Pi, or one that
+	// kept them on its owner's root - dials names that need mapping;
+	// elsewhere its services dial localhost, and the block is removed.
+	if st.deevnet() || st.keepsTenantNames() {
 		var names []string
 		for _, s := range kitServices {
 			names = append(names, st.name(s))
