@@ -176,6 +176,13 @@ func (k *kit) pkiCA(w io.Writer, mode string, args []string) error {
 		fmt.Fprintln(w, "This Pi already serves on your root: run sudo deevnet-kit pki switch to reissue its certificate from the new issuing CA.")
 		return nil
 	}
+	// A new card for a Pi that already left: its devices hold the owner's
+	// root, so there is no bundle to hand out first.
+	if mode == "issuing" {
+		fmt.Fprintln(w, "Nothing this Pi serves has changed yet. Devices that already trust your root need nothing new:")
+		fmt.Fprintln(w, "  sudo deevnet-kit pki switch, then restore their broker accounts (deevnet-kit account add --password-file).")
+		return nil
+	}
 	fmt.Fprintln(w, "Nothing this Pi serves has changed yet. Next:")
 	fmt.Fprintf(w, "  1. sudo deevnet-kit export DIR writes %s: the root trusted now and yours.\n", trustBundleName)
 	fmt.Fprintln(w, "     Give it to every device and computer that talks to this Pi, in place of the CA file they have.")

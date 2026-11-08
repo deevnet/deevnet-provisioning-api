@@ -207,8 +207,12 @@ func TestANewCardFromTheStick(t *testing.T) {
 	}
 
 	card, _ := ownerKit(t, "tenant=mabell\nindex=3\n")
+	out.Reset()
 	if err := card.cmdPKI(&out, []string{"issuing", "--org", "Mabell Home", "--keys", stick}); err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), trustBundleName) || !strings.Contains(out.String(), "pki switch") {
+		t.Errorf("a new card's next step is pki switch, not the bundle:\n%s", out.String())
 	}
 	if err := card.cmdPKI(&out, []string{"switch"}); err != nil {
 		t.Fatal(err)

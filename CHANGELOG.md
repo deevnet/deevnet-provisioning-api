@@ -6,7 +6,7 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
-## Unreleased
+## 0.18.0 (2026-11-08)
 
 ### Added
 
@@ -25,7 +25,8 @@ One tag covers everything this repository builds: the API, the two writers
     name afterwards, so only its trusted root changes. A new card for such a Pi takes
     `pki issuing --domain <tenant>.deevnet.net`.
   - `pki enroll DEVICE --out DIR [--csr FILE]` issues a device's certificate.
-  - `pki issuing` makes a new card's issuing CA from the root on the stick.
+  - `pki issuing` makes a new card's issuing CA from the root on the stick, and says the next step is
+    `pki switch`: the card's devices already trust that root.
   - Once on the owner's root, `regen-certs` renews from the owner's CA on the Pi alone.
   - The server certificate names `<host>.local`, `localhost`, loopback, the Pi's private
     addresses, and extra names under `.local` or the owner's domains. The bare host name is left
