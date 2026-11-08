@@ -222,6 +222,7 @@ func openbaoClient(getenv func(string) string) (*openbao.Client, error) {
 
 		ServiceMount: getenv("OPENBAO_TENANT_SERVICE_MOUNT"),
 		ServiceRole:  orDefault(getenv("OPENBAO_TENANT_SERVICE_ROLE"), "tenant-service"),
+		ServiceCEL:   boolEnv(getenv, "OPENBAO_TENANT_SERVICE_CEL", false),
 	})
 }
 

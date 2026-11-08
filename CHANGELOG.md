@@ -6,6 +6,20 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Added
+
+- `OPENBAO_TENANT_SERVICE_CEL=true` signs tenants' server certificates through the Tenant Service
+  CA's CEL role (`cel/sign/<role>`, OpenBao 2.4 or later) rather than its classic role. The CEL
+  role, which Ansible writes, refuses a reserved tenant label, a request naming two tenants and a
+  name of any other shape itself, so the secret store holds the line the API's checks hold
+  (ADR-0040 §3, CHG-0059).
+
+### Upgrading
+
+- Off by default. Write the CEL role and grant the API `cel/sign/<role>` before turning it on.
+
 ## 0.16.0 (2026-11-07)
 
 ### Added

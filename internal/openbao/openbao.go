@@ -45,6 +45,12 @@ type Config struct {
 	// the client signs nothing.
 	ServiceMount string // pki-tenant-service
 	ServiceRole  string // tenant-service
+	// ServiceCEL signs through the mount's CEL role of that name
+	// (cel/sign/<role>) rather than its classic role (sign/<role>). The CEL
+	// role is a program Ansible writes, which refuses a reserved tenant label
+	// itself (ADR-0040 §3, CHG-0059); the classic role cannot tell a tenant's
+	// name from a site's.
+	ServiceCEL bool
 }
 
 // Client logs in with its AppRole on first use and again when its token
@@ -293,6 +299,9 @@ func (c *Client) SignServer(ctx context.Context, csrPEM string, names []string) 
 		} `json:"data"`
 	}
 	path := "/v1/" + c.cfg.ServiceMount + "/sign/" + c.cfg.ServiceRole
+	if c.cfg.ServiceCEL {
+		path = "/v1/" + c.cfg.ServiceMount + "/cel/sign/" + c.cfg.ServiceRole
+	}
 	if err := c.do(ctx, http.MethodPost, path, in, &out); err != nil {
 		return tenant.SignedCertificate{}, fmt.Errorf("openbao: sign: %w", err)
 	}
