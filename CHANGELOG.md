@@ -17,8 +17,13 @@ One tag covers everything this repository builds: the API, the two writers
     issuing CA on the Pi. Nothing served changes. Until the switch, `export` and `env` hand out
     `trust-bundle.pem`, the root trusted now and the owner's, for every device and computer.
   - `pki switch` reissues the Pi's certificate from the owner's CA and moves every service onto
-    the owner's root. It keeps the root it replaced as `previous-root.pem`. On a Deevnet Pi it
-    removes the hosts mapping, and an extra name the owner's CA can't sign is left out and listed.
+    the owner's root. It keeps the root it replaced as `previous-root.pem`. An extra name the
+    owner's CA can't sign is left out and listed.
+  - **On a Deevnet Pi, the tenant's names survive the switch.** `pki init` also permits the owner's
+    CA `<tenant>.deevnet.net`, and `pki switch` keeps `mqtt`, `logs` and `grafana` under it, with
+    their loopback mapping. A device that verified `mqtt.<tenant>.deevnet.net` verifies the same
+    name afterwards, so only its trusted root changes. A new card for such a Pi takes
+    `pki issuing --domain <tenant>.deevnet.net`.
   - `pki enroll DEVICE --out DIR [--csr FILE]` issues a device's certificate.
   - `pki issuing` makes a new card's issuing CA from the root on the stick.
   - Once on the owner's root, `regen-certs` renews from the owner's CA on the Pi alone.
