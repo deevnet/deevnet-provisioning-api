@@ -325,6 +325,56 @@ func (s *Service) Reconcile(ctx context.Context, name string) (Result, error) {
 	}, err
 }
 
+// ReissueStateSecret replaces a tenant's state-store secret with a new one and
+// returns it: the operator's way back in for a tenant that has lost the keys to
+// its own state (2026-10 review T2, CHG-0060). The old secret stops working.
+//
+// It is not a reconcile that returns the stored secret: handing that back would
+// make a repair look like a reissue, and a secret that may have leaked would
+// keep working. The registry is written before the store, so a store that
+// fails leaves the registry ahead of it, and the next reconcile or reissue puts
+// the store right. The other way round, a reconcile would put the old secret
+// back.
+//
+// The tenant's Terraform state still holds the old secret afterwards, and a
+// restore supplies the secrets in state, which win (ADR-0015 §4). Until the
+// secret moves out of state (CHG-0040), a tenant that has been reissued one
+// must not restore from its old state.
+func (s *Service) ReissueStateSecret(ctx context.Context, name string) (Result, error) {
+	rec, err := s.Store.Get(ctx, name)
+	if err != nil {
+		return Result{}, err
+	}
+	if rec.Status == StatusDeleting {
+		return Result{}, invalid("tenant %q is deleting; finish deleting it first", name)
+	}
+	// SetSecrets writes every column. With some unreadable, it would write them
+	// back empty and lose what the tenant could still resupply.
+	if rec.Secrets.Unreadable {
+		return Result{}, invalid("tenant %q has stored secrets the API cannot read; the tenant must supply them again first", name)
+	}
+	state, err := randomHex(20)
+	if err != nil {
+		return Result{}, err
+	}
+	secrets := rec.Secrets
+	secrets.State = state
+	if err := s.Store.SetSecrets(ctx, name, secrets); err != nil {
+		return Result{}, err
+	}
+	rec.Secrets = secrets
+	s.audit(ctx, "reissue-state-secret", name, map[string]any{"index": rec.Index})
+
+	err = s.State.Ensure(ctx, s.stateTenant(rec))
+	s.recordStep(ctx, name, StepState, err)
+	if err != nil {
+		// No secret is returned: the store may still hold the old one. Asking
+		// again mints another.
+		return Result{Record: s.reload(ctx, rec)}, &StepError{Step: StepState, Err: err}
+	}
+	return Result{Record: s.reload(ctx, rec), Issued: Issued{StateSecret: state}}, nil
+}
+
 // Get returns a registered tenant.
 func (s *Service) Get(ctx context.Context, name string) (Record, error) {
 	if !ValidName(name) {

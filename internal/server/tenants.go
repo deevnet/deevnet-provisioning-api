@@ -21,6 +21,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	mux.HandleFunc("GET /v1/tenants/{name}", h.ownTenant(h.get))
 	mux.HandleFunc("DELETE /v1/tenants/{name}", h.ownTenant(h.delete))
 	mux.HandleFunc("POST /v1/tenants/{name}/reconcile", operatorOnly(h.reconcile))
+	mux.HandleFunc("POST /v1/tenants/{name}/state-secret", operatorOnly(h.reissueStateSecret))
 	mux.HandleFunc("GET /v1/fabric/egress", egressReader(h.egress))
 	workloadRoutes(mux, h)
 	wifiKeyRoutes(mux, h)
@@ -375,6 +376,25 @@ func (h *tenantHandlers) reconcile(w http.ResponseWriter, r *http.Request) {
 		// The dashboard password for the same reason as the log tokens.
 		DashboardPassword: res.Issued.DashboardPassword,
 	}))
+}
+
+// stateSecretView is a reissued state-store secret (CHG-0060): the store's
+// coordinates and the new key, which the operator hands to the tenant.
+type stateSecretView struct {
+	Name  string    `json:"name"`
+	State stateView `json:"state"`
+}
+
+// reissueStateSecret is the operator's only way to give a tenant a state key:
+// a new one, never the stored one (2026-10 review T2).
+func (h *tenantHandlers) reissueStateSecret(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.ReissueStateSecret(r.Context(), r.PathValue("name"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	v := h.view(res.Record, "", &tenant.Issued{StateSecret: res.Issued.StateSecret})
+	writeJSON(w, http.StatusOK, stateSecretView{Name: v.Name, State: v.State})
 }
 
 func (h *tenantHandlers) egress(w http.ResponseWriter, r *http.Request) {

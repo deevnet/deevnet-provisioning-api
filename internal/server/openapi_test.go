@@ -139,6 +139,7 @@ var wireSchemas = map[string]any{
 	"TenantDashboard":      dashboardView{},
 	"TenantStep":           stepView{},
 	"Tenant":               tenantView{},
+	"StateSecret":          stateSecretView{},
 	"WorkloadRequest":      workloadBody{},
 	"Workload":             workloadView{},
 	"RecordRequest":        recordBody{},
