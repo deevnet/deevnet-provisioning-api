@@ -218,6 +218,43 @@ func TestReconcileAndEgress(t *testing.T) {
 	}
 }
 
+// The state-secret reissue is the operator's: it returns the new key and
+// nothing else, and a tenant can't reissue its own (CHG-0060).
+func TestReissueStateSecretIsOperatorOnlyAndReturnsOnlyTheKey(t *testing.T) {
+	h, _, b := tenantServer(t)
+	_, created := call(t, h, http.MethodPost, "/v1/tenants", `{"name":"eds"}`)
+	old := dig(created, "state", "secret_key")
+	tok := created["api_token"].(string)
+
+	if rec, _ := callAs(t, h, tok, http.MethodPost, "/v1/tenants/eds/state-secret", ""); rec.Code != http.StatusForbidden {
+		t.Errorf("tenant reissuing its own state secret: %d, want 403", rec.Code)
+	}
+
+	rec, out := call(t, h, http.MethodPost, "/v1/tenants/eds/state-secret", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reissue: %d %v", rec.Code, out)
+	}
+	got := dig(out, "state", "secret_key")
+	if got == nil || got == old {
+		t.Fatalf("secret_key = %v, want a new one", got)
+	}
+	if dig(out, "state", "access_key") != "eds" || out["name"] != "eds" {
+		t.Errorf("reissue body = %v", out)
+	}
+	if b.States["eds"].Secret != got {
+		t.Error("the store does not hold the returned secret")
+	}
+	for _, k := range []string{"api_token", "dns", "log", "dashboard"} {
+		if _, ok := out[k]; ok {
+			t.Errorf("the reissue returned %q", k)
+		}
+	}
+
+	if rec, _ := call(t, h, http.MethodPost, "/v1/tenants/nope/state-secret", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("reissue for an unknown tenant: %d, want 404", rec.Code)
+	}
+}
+
 func TestUnconfiguredTenantsStillAnswer501(t *testing.T) {
 	h := newTestServer(fakeDB{})
 	rec, body := do(t, h, http.MethodGet, "/v1/tenants", "s3cret")

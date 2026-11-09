@@ -6,6 +6,17 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Added
+
+- `POST /v1/tenants/{name}/state-secret`, operator only, reissues a tenant's state-store secret
+  (CHG-0060, 2026-10 review T2). It mints a new secret, records it, sets it on the store and
+  returns it; the old one stops working. It is the way back in for a tenant that has lost the keys
+  to its own state. The stored secret is still never returned. The tenant's Terraform state keeps
+  the old secret, and a restore from that state would put it back, so a tenant given a new secret
+  must not restore from its old state.
+
 ## 0.18.0 (2026-11-08)
 
 ### Added

@@ -78,7 +78,8 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   returns a fixed shape. A failed backend step names the step only; its error goes to the log and
   `tenant_steps`. Secrets appear only in create and restore responses - and the log tokens and the
   dashboard password also on a reconcile, because unlike the API token they are readable and a tenant
-  created before the store existed has to be handed them somehow. Tests assert all of this.
+  created before the store existed has to be handed them somehow. The operator's state-secret reissue
+  returns a *new* state secret, never the stored one. Tests assert all of this.
 - **Dashboard data sources have fixed UIDs** (`internal/backend/grafana.DataSources`), the same in
   every tenant's organisation and on the Pi. A dashboard names them; changing one breaks every
   tenant's dashboards. The tenant login is an Editor, never Admin: an Admin can create a data

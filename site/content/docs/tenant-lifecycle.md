@@ -107,6 +107,25 @@ reservations back as well.
 The answer carries no secrets, with one exception: the log tokens and the dashboard password are
 returned, which is how a tenant created before those stores existed is handed them.
 
+## Reissue the state secret
+
+**`POST /v1/tenants/{name}/state-secret` gives a tenant a new state-store secret.** Only the
+operator may call it. The API mints a secret, records it, sets it on the store and returns it, with
+the store's endpoint, bucket and prefix. The old secret stops working. It is the way back in for a
+tenant that has lost the keys to its own state, which are kept inside that state.
+
+The stored secret is never returned, by this or any other route. A reissue always mints a new one.
+
+**The tenant's Terraform state still holds the old secret afterwards.** A restore sends back what
+state holds, and the supplied secrets win, so a restore from that state would put the old secret
+back and lock the tenant out again. A tenant given a new secret must not restore from its old state.
+
+| Status | Meaning |
+|---|---|
+| `200` | the new secret, under `state.secret_key` |
+| `400` | the tenant is deleting, or the API holds secrets for it that it can't read: the tenant supplies them again first |
+| `502` | the store refused; no secret is returned and the store may still hold the old one. Asking again mints another |
+
 ## Delete
 
 **`DELETE /v1/tenants/{name}` removes everything the API built for the tenant, then its registry

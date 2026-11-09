@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
+	"github.com/minio/madmin-go/v3"
 )
 
 func TestPolicyMatchesTheMinioRole(t *testing.T) {
@@ -82,6 +83,22 @@ func TestEnsureAndRemove(t *testing.T) {
 	info, err := c.admin.GetUserInfo(ctx, st.User)
 	if err != nil || info.PolicyName != PolicyName(st.User) {
 		t.Fatalf("user info %+v (%v), want policy %s attached", info.PolicyName, err, PolicyName(st.User))
+	}
+	// And the old secret stops working, which is what a state-secret reissue
+	// relies on (CHG-0060). Any user may read its own account.
+	login := func(secret string) error {
+		u, err := New(ep, st.User, secret, false, "")
+		if err != nil {
+			return err
+		}
+		_, err = u.admin.AccountInfo(ctx, madmin.AccountOpts{})
+		return err
+	}
+	if err := login("second-secret-5678"); err != nil {
+		t.Errorf("the new secret can't sign in: %v", err)
+	}
+	if err := login("first-secret-1234"); err == nil {
+		t.Error("the old secret still signs in after a new one was ensured")
 	}
 
 	if err := c.Remove(ctx, st.User); err != nil {

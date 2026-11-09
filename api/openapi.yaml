@@ -358,6 +358,40 @@ paths:
         "404": { $ref: "#/components/responses/TenantNotFound" }
         "502": { $ref: "#/components/responses/StepFailed" }
         "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/state-secret:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    post:
+      tags: [Tenants]
+      operationId: reissueStateSecret
+      summary: Reissue a tenant's state-store secret
+      description: |
+        **Callers:** operator.
+
+        Mints a new secret for the tenant's user in the state store, records it, sets it on the
+        store and returns it. The old secret stops working. This is the way back in for a tenant
+        that has lost the keys to its own state; the stored secret is never returned, by this or
+        any other route.
+
+        The tenant's Terraform state still holds the old secret afterwards. A restore supplies the
+        secrets in state and they win, so a tenant given a new secret must not restore from its
+        old state.
+
+        Refused with `400` while the tenant is deleting, or while the API holds secrets for it that
+        it cannot read: the tenant supplies them again first. On a `502` no secret is returned and
+        the store may still hold the old one; asking again mints another.
+      responses:
+        "200":
+          description: The new secret.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StateSecret" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/OperatorOnly" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
 
   /v1/tenants/{name}/workloads:
     parameters:
@@ -1368,7 +1402,14 @@ components:
         bucket: { type: string }
         key_prefix: { type: string, description: The prefix this tenant may write. }
         access_key: { type: string }
-        secret_key: { type: string, description: Create responses only. }
+        secret_key: { type: string, description: Create responses and a state-secret reissue only. }
+    StateSecret:
+      type: object
+      description: A reissued state-store secret, handed to the tenant by the operator.
+      required: [name, state]
+      properties:
+        name: { type: string }
+        state: { $ref: "#/components/schemas/TenantState" }
     TenantLog:
       type: object
       description: |
