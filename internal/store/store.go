@@ -362,17 +362,24 @@ func (p *Postgres) Delete(ctx context.Context, name string) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx,
+		if _, err = tx.Exec(ctx,
 			`INSERT INTO revoked_tenant_tokens (token_hash, tenant) VALUES ($1, $2) ON CONFLICT (token_hash) DO NOTHING`,
-			hash, name)
+			hash, name); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO deleted_tenant_names (tenant) VALUES ($1) ON CONFLICT (tenant) DO UPDATE SET deleted_at = now()`,
+			name)
 		return err
 	})
 }
 
-// Revoked reports whether a token hash belongs to a deleted tenant.
-func (p *Postgres) Revoked(ctx context.Context, tokenHash []byte) (bool, error) {
+// Revoked reports whether a token for an unregistered name is a deleted
+// tenant's: its hash was revoked, or its name was deleted (0012).
+func (p *Postgres) Revoked(ctx context.Context, name string, tokenHash []byte) (bool, error) {
 	var revoked bool
-	err := p.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM revoked_tenant_tokens WHERE token_hash = $1)`, tokenHash).Scan(&revoked)
+	err := p.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM revoked_tenant_tokens WHERE token_hash = $1)
+		OR EXISTS (SELECT 1 FROM deleted_tenant_names WHERE tenant = $2)`, tokenHash, name).Scan(&revoked)
 	return revoked, err
 }
 

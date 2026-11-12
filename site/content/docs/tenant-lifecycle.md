@@ -145,5 +145,5 @@ dashboards, library panels, snapshots and annotations are deleted first, so noth
 
 **A deleted tenant's token is refused, including to create the tenant again.** A token verifies
 without the registry so that a tenant can restore itself after a lost registry; the delete records
-the token as revoked, so it is not taken for one. A tenant admitted again under the name is issued a
-new token.
+the token and the name as deleted, so no token for that name is taken for one. A tenant admitted
+again under the name is issued a new token.

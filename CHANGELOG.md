@@ -6,6 +6,21 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Changed
+
+- **A deleted tenant's name refuses every token for it** (CHG-0065), not only the token its row
+  held. A tenant token whose name is not registered but was deleted is answered `401`, and an
+  operator restore carrying one is `400`; the name comes back only through admission, which issues
+  a new token. This covers tenants deleted before 0.20.0, whose token hashes were never kept.
+
+### Upgrading
+
+- Migration `0012_deleted_names.sql` seeds the deleted names from the audit log's `delete`
+  entries, so every tenant ever deleted is covered from the first start. A deleted tenant that was
+  admitted again is unaffected: while a name is registered, its row's token hash decides.
+
 ## 0.20.1 (2026-11-12)
 
 ### Fixed
