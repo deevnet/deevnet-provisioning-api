@@ -350,8 +350,30 @@ func (p *Postgres) RecordStep(ctx context.Context, name, step string, stepErr er
 	return err
 }
 
+// Delete removes the tenant's row and revokes its API token in one
+// transaction (0011_revoked_tokens.sql).
 func (p *Postgres) Delete(ctx context.Context, name string) error {
-	return p.execOne(ctx, `DELETE FROM tenants WHERE name = $1`, name)
+	return pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
+		var hash []byte
+		err := tx.QueryRow(ctx, `DELETE FROM tenants WHERE name = $1 RETURNING api_token_hash`, name).Scan(&hash)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return tenant.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO revoked_tenant_tokens (token_hash, tenant) VALUES ($1, $2) ON CONFLICT (token_hash) DO NOTHING`,
+			hash, name)
+		return err
+	})
+}
+
+// Revoked reports whether a token hash belongs to a deleted tenant.
+func (p *Postgres) Revoked(ctx context.Context, tokenHash []byte) (bool, error) {
+	var revoked bool
+	err := p.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM revoked_tenant_tokens WHERE token_hash = $1)`, tokenHash).Scan(&revoked)
+	return revoked, err
 }
 
 func (p *Postgres) Audit(ctx context.Context, e tenant.AuditEntry) error {

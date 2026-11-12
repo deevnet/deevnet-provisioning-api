@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Postgres {
 	}
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, tenants, schema_migrations CASCADE`,
+		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, revoked_tenant_tokens, tenants, schema_migrations CASCADE`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatal(err)
@@ -179,6 +179,16 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if err := p.SetStatus(ctx, "tdemo", tenant.StatusReady); !errors.Is(err, tenant.ErrNotFound) {
 		t.Fatalf("update after delete: %v", err)
+	}
+	// The delete revoked the token the row held, and only that one (CHG-0065).
+	if revoked, err := p.Revoked(ctx, tenant.HashToken("new")); err != nil || !revoked {
+		t.Fatalf("the deleted tenant's token: revoked=%v (%v), want revoked", revoked, err)
+	}
+	if revoked, err := p.Revoked(ctx, tenant.HashToken("tok")); err != nil || revoked {
+		t.Fatalf("a token the row no longer held: revoked=%v (%v)", revoked, err)
+	}
+	if err := p.Delete(ctx, "tdemo"); !errors.Is(err, tenant.ErrNotFound) {
+		t.Fatalf("second delete: %v, want ErrNotFound", err)
 	}
 	var audits int
 	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE tenant = 'tdemo'`).Scan(&audits); err != nil || audits != 1 {

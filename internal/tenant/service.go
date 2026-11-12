@@ -153,6 +153,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Result, error)
 		if name, ok := s.Tokens.Verify(req.APIToken); !ok || name != req.Name {
 			return Result{}, invalid("api_token was not issued for tenant %q", req.Name)
 		}
+		// A deleted tenant's token restores nothing (CHG-0065).
+		revoked, err := s.Store.Revoked(ctx, HashToken(req.APIToken))
+		if err != nil {
+			return Result{}, err
+		}
+		if revoked {
+			return Result{}, invalid("api_token was revoked when tenant %q was deleted", req.Name)
+		}
 	}
 
 	rec, err := s.Store.Get(ctx, req.Name)
@@ -1108,7 +1116,8 @@ type Caller struct {
 
 // Authenticate returns the tenant a bearer token speaks for. A registered
 // tenant is accepted only with the token whose hash the registry holds, so a
-// replaced token is revoked.
+// replaced token is revoked; an unregistered one only if its tenant was not
+// deleted, since a delete revokes the token it held.
 //
 // The error is ErrSecretsUnavailable only: a sealed OpenBao leaves the caller
 // unknown, not refused, and saying 401 would tell a tenant its token is bad.
@@ -1123,6 +1132,16 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Caller, bool,
 	rec, err := s.Store.Get(ctx, name)
 	switch {
 	case errors.Is(err, ErrNotFound):
+		// Unregistered: a restore after the registry was lost, unless the
+		// tenant was deleted, which revoked this token (CHG-0065).
+		revoked, rerr := s.Store.Revoked(ctx, HashToken(token))
+		if rerr != nil {
+			s.logger().Error("checking tenant token revocation", "tenant", name, "err", rerr)
+			return Caller{}, false, nil
+		}
+		if revoked {
+			return Caller{}, false, nil
+		}
 		return Caller{Tenant: name}, true, nil
 	case errors.Is(err, ErrSecretsUnavailable):
 		return Caller{}, false, err

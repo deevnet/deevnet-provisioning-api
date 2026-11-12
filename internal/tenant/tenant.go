@@ -349,7 +349,11 @@ type Store interface {
 	// tenant (CHG-0024).
 	SetDashboardOrg(ctx context.Context, name string, orgID int) error
 	RecordStep(ctx context.Context, name, step string, stepErr error) error
+	// Delete removes the tenant's row and, in the same transaction, revokes
+	// the API token whose hash the row held (CHG-0065).
 	Delete(ctx context.Context, name string) error
+	// Revoked reports whether a token hash is a deleted tenant's.
+	Revoked(ctx context.Context, tokenHash []byte) (bool, error)
 
 	Audit(ctx context.Context, e AuditEntry) error
 }
