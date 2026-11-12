@@ -6,6 +6,15 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Fixed
+
+- A tenant delete failed at the `dashboards` step (502) when the tenant had made a folder: the
+  folder delete asked Grafana to force-delete alert rules, which a Grafana with alerting off, as
+  the site runs it, refuses even to the server admin (403). Folders are now deleted plainly. The
+  integration tests' Grafana now runs with alerting off too, which is how this was missed.
+
 ## 0.20.0 (2026-11-12)
 
 ### Changed
