@@ -353,6 +353,29 @@ func TestTenantRestoresItselfAfterTheRegistryIsLost(t *testing.T) {
 	}
 }
 
+// A deleted tenant's token cannot create its name again: it is not a restore
+// after a lost registry, and is answered like any token the API does not
+// recognise (CHG-0065).
+func TestADeletedTenantsTokenIsRevoked(t *testing.T) {
+	h, _, _ := tenantServer(t)
+	_, first := call(t, h, http.MethodPost, "/v1/tenants", `{"name":"tdemo"}`)
+	tok := first["api_token"].(string)
+	if rec, _ := callAs(t, h, tok, http.MethodDelete, "/v1/tenants/tdemo", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("the tenant deletes itself: %d", rec.Code)
+	}
+	restore := `{"name":"tdemo","index":1,"tsig_secret":"` + dig(first, "dns", "tsig_secret").(string) +
+		`","state_secret":"` + dig(first, "state", "secret_key").(string) + `","api_token":"` + tok + `"}`
+	if rec, _ := callAs(t, h, tok, http.MethodPost, "/v1/tenants", restore); rec.Code != http.StatusUnauthorized {
+		t.Errorf("recreating with the deleted tenant's token: %d, want 401", rec.Code)
+	}
+	if rec, _ := callAs(t, h, tok, http.MethodGet, "/v1/tenants/tdemo", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("reading with the deleted tenant's token: %d, want 401", rec.Code)
+	}
+	if rec, _ := call(t, h, http.MethodPost, "/v1/tenants", restore); rec.Code != http.StatusBadRequest {
+		t.Errorf("an operator restore carrying the revoked token: %d, want 400", rec.Code)
+	}
+}
+
 // The audit log has to say who, not just what: it is the only record that a
 // tenant built its own workload rather than an operator doing it for them.
 // A tenant has to be able to see that the API can no longer read its secrets,

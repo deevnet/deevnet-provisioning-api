@@ -213,6 +213,10 @@ paths:
         | `201` | `reissued` | new name to the registry, requested index held by another tenant, so a new one was issued |
         | `200` | `resumed` | name registered but not `ready`: a previous create failed part way. Without secrets, a new API token is issued |
         | `200` | `reconciled` | name registered and `ready`, and the request carried all three secrets. They replace the stored ones |
+
+        A deleted tenant's token restores nothing. Used as the bearer it is answered `401`, like
+        any token the API does not recognize; carried in an operator's restore it is `400`. A
+        tenant admitted again under the name is issued a new token.
       requestBody:
         required: true
         content:
@@ -315,6 +319,9 @@ paths:
         Removes the tenant's broker accounts, device address reservations, resolver forwards,
         zones, DNS update key, state-store user and policy, dashboard login and organization, then
         its registry row. State objects stay in the bucket.
+
+        The row goes together with the tenant's API token: from then on the token is refused
+        everywhere, including to create the tenant again.
 
         The tenant destroys its own workloads first.
       responses:

@@ -6,6 +6,24 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Changed
+
+- **Deleting a tenant revokes its API token** (CHG-0065). Until now a deleted tenant's token still
+  verified by its MAC and, with no registry row to compare against, was taken for a tenant restoring
+  itself after a lost registry, so it could create the name again. The delete now records the
+  token's hash in `revoked_tenant_tokens` in the same transaction that removes the row, and a
+  revoked token is answered `401`, or `400` when an operator's restore carries it. A tenant admitted
+  again under the name gets a new token. A restore after a genuinely lost registry is unchanged;
+  the table is lost with it, so a token deleted before that loss would be accepted again.
+
+### Upgrading
+
+- Migration `0011_revoked_tokens.sql` runs on start. A tenant deleted before this release left no
+  hash behind, so this does not cover its token: the token can still create its name. The
+  audit log's `delete` entries name those tenants.
+
 ## 0.19.0 (2026-11-09)
 
 ### Added

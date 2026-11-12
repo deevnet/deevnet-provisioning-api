@@ -409,6 +409,49 @@ func TestDeleteRemovesEverything(t *testing.T) {
 	}
 }
 
+// A delete revokes the tenant's token: without that, the token verifies by its
+// MAC alone and looks like a restore after a lost registry (CHG-0065).
+func TestDeleteRevokesTheAPIToken(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	res, err := svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := res.Issued.APIToken
+	if err := svc.Delete(ctx, "tdemo"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if c, ok, err := svc.Authenticate(ctx, old); err != nil || ok {
+		t.Fatalf("deleted tenant's token authenticated: %+v %v %v", c, ok, err)
+	}
+
+	// An operator restore carrying it is refused too.
+	req := tenant.CreateRequest{Name: "tdemo", Index: 5, TSIGSecret: "c2VjcmV0c2VjcmV0c2VjcmV0", StateSecret: "statesecret", APIToken: old}
+	var inv *tenant.InvalidError
+	if _, err := svc.Create(ctx, req); !errors.As(err, &inv) {
+		t.Fatalf("restore with a revoked token: %v, want an InvalidError", err)
+	}
+
+	// The name can be created again, and its new token works; the old one
+	// still does not.
+	res, err = svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"})
+	if err != nil {
+		t.Fatalf("create again: %v", err)
+	}
+	if c, ok, err := svc.Authenticate(ctx, res.Issued.APIToken); err != nil || !ok || !c.Registered {
+		t.Fatalf("new token: %+v %v %v", c, ok, err)
+	}
+	if _, ok, _ := svc.Authenticate(ctx, old); ok {
+		t.Error("the revoked token authenticated once the name was registered again")
+	}
+
+	// A token for a name that was never deleted still restores.
+	other, _ := testTokens.Issue("eds")
+	if c, ok, err := svc.Authenticate(ctx, other); err != nil || !ok || c.Registered {
+		t.Fatalf("unregistered, never deleted: %+v %v %v", c, ok, err)
+	}
+}
+
 func TestIndexExhaustion(t *testing.T) {
 	svc, st, _ := tenanttest.NewService()
 	for n := tenant.MinIndex; n <= tenant.MaxAllocatable; n++ {

@@ -32,6 +32,7 @@ type Store struct {
 	brokerAccts   map[string]tenant.BrokerAccount
 	certificates  map[string]tenant.Certificate
 	extraRecords  map[string]tenant.ExtraRecord
+	revoked       map[string]string
 	AuditLog      []tenant.AuditEntry
 }
 
@@ -122,13 +123,25 @@ func (s *Store) RecordStep(_ context.Context, name, step string, stepErr error) 
 	})
 }
 
+func (s *Store) Revoked(_ context.Context, tokenHash []byte) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.revoked[string(tokenHash)]
+	return ok, nil
+}
+
 func (s *Store) Delete(_ context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.records[name]; !ok {
+	r, ok := s.records[name]
+	if !ok {
 		return tenant.ErrNotFound
 	}
 	delete(s.records, name)
+	if s.revoked == nil {
+		s.revoked = map[string]string{}
+	}
+	s.revoked[string(r.Secrets.APITokenHash)] = name
 	// The registry does this with a foreign key (0010_certificates.sql):
 	// nothing else removes a certificate's row, because there is no backend
 	// to tell first.
