@@ -33,6 +33,7 @@ type Store struct {
 	certificates  map[string]tenant.Certificate
 	extraRecords  map[string]tenant.ExtraRecord
 	revoked       map[string]string
+	deletedNames  map[string]bool
 	AuditLog      []tenant.AuditEntry
 }
 
@@ -123,11 +124,22 @@ func (s *Store) RecordStep(_ context.Context, name, step string, stepErr error) 
 	})
 }
 
-func (s *Store) Revoked(_ context.Context, tokenHash []byte) (bool, error) {
+func (s *Store) Revoked(_ context.Context, name string, tokenHash []byte) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, ok := s.revoked[string(tokenHash)]
-	return ok, nil
+	return ok || s.deletedNames[name], nil
+}
+
+// MarkDeleted records a name as deleted without a row having existed here,
+// as the audit log seeds names deleted before the registry kept them.
+func (s *Store) MarkDeleted(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deletedNames == nil {
+		s.deletedNames = map[string]bool{}
+	}
+	s.deletedNames[name] = true
 }
 
 func (s *Store) Delete(_ context.Context, name string) error {
@@ -142,6 +154,10 @@ func (s *Store) Delete(_ context.Context, name string) error {
 		s.revoked = map[string]string{}
 	}
 	s.revoked[string(r.Secrets.APITokenHash)] = name
+	if s.deletedNames == nil {
+		s.deletedNames = map[string]bool{}
+	}
+	s.deletedNames[name] = true
 	// The registry does this with a foreign key (0010_certificates.sql):
 	// nothing else removes a certificate's row, because there is no backend
 	// to tell first.

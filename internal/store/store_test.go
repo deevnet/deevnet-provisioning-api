@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Postgres {
 	}
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, revoked_tenant_tokens, tenants, schema_migrations CASCADE`,
+		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, revoked_tenant_tokens, deleted_tenant_names, tenants, schema_migrations CASCADE`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatal(err)
@@ -181,11 +181,15 @@ func TestStoreLifecycle(t *testing.T) {
 		t.Fatalf("update after delete: %v", err)
 	}
 	// The delete revoked the token the row held, and only that one (CHG-0065).
-	if revoked, err := p.Revoked(ctx, tenant.HashToken("new")); err != nil || !revoked {
+	if revoked, err := p.Revoked(ctx, "other", tenant.HashToken("new")); err != nil || !revoked {
 		t.Fatalf("the deleted tenant's token: revoked=%v (%v), want revoked", revoked, err)
 	}
-	if revoked, err := p.Revoked(ctx, tenant.HashToken("tok")); err != nil || revoked {
-		t.Fatalf("a token the row no longer held: revoked=%v (%v)", revoked, err)
+	if revoked, err := p.Revoked(ctx, "other", tenant.HashToken("tok")); err != nil || revoked {
+		t.Fatalf("a token the row no longer held, for another name: revoked=%v (%v)", revoked, err)
+	}
+	// And the name: any token for it is refused (0012).
+	if revoked, err := p.Revoked(ctx, "tdemo", tenant.HashToken("tok")); err != nil || !revoked {
+		t.Fatalf("a token for the deleted name: revoked=%v (%v), want revoked", revoked, err)
 	}
 	if err := p.Delete(ctx, "tdemo"); !errors.Is(err, tenant.ErrNotFound) {
 		t.Fatalf("second delete: %v, want ErrNotFound", err)
@@ -193,6 +197,43 @@ func TestStoreLifecycle(t *testing.T) {
 	var audits int
 	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE tenant = 'tdemo'`).Scan(&audits); err != nil || audits != 1 {
 		t.Fatalf("audit rows = %d (%v), want 1 surviving the tenant", audits, err)
+	}
+}
+
+// 0012 seeds the names deleted before it from the audit log, so the tokens of
+// tenants deleted before CHG-0065, whose hashes were never kept, are refused.
+// Tested as a site upgrading runs it: the audit rows exist, then 0012 applies.
+func TestDeletedNamesAreSeededFromTheAuditLog(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+	// Back to just before 0012, with the history a site already has.
+	for _, stmt := range []string{
+		`DROP TABLE deleted_tenant_names`,
+		`DELETE FROM schema_migrations WHERE version = 12`,
+	} {
+		if _, err := p.pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range []tenant.AuditEntry{
+		{Actor: "operator", Action: "create", Tenant: "wtest"},
+		{Actor: "operator", Action: "delete", Tenant: "wtest"},
+		{Actor: "tenant:twk", Action: "delete", Tenant: "twk"},
+		{Actor: "tenant:twk", Action: "delete", Tenant: "twk"},
+		{Actor: "operator", Action: "create", Tenant: "live"},
+	} {
+		if err := p.Audit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for name, want := range map[string]bool{"wtest": true, "twk": true, "live": false} {
+		got, err := p.Revoked(ctx, name, tenant.HashToken("any"))
+		if err != nil || got != want {
+			t.Errorf("%s: revoked=%v (%v), want %v", name, got, err, want)
+		}
 	}
 }
 

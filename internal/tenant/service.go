@@ -154,7 +154,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Result, error)
 			return Result{}, invalid("api_token was not issued for tenant %q", req.Name)
 		}
 		// A deleted tenant's token restores nothing (CHG-0065).
-		revoked, err := s.Store.Revoked(ctx, HashToken(req.APIToken))
+		revoked, err := s.Store.Revoked(ctx, req.Name, HashToken(req.APIToken))
 		if err != nil {
 			return Result{}, err
 		}
@@ -1141,8 +1141,8 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Caller, bool,
 	switch {
 	case errors.Is(err, ErrNotFound):
 		// Unregistered: a restore after the registry was lost, unless the
-		// tenant was deleted, which revoked this token (CHG-0065).
-		revoked, rerr := s.Store.Revoked(ctx, HashToken(token))
+		// tenant was deleted, which revoked its token and its name (CHG-0065).
+		revoked, rerr := s.Store.Revoked(ctx, name, HashToken(token))
 		if rerr != nil {
 			s.logger().Error("checking tenant token revocation", "tenant", name, "err", rerr)
 			return Caller{}, false, nil

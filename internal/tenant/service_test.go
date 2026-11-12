@@ -449,10 +449,44 @@ func TestDeleteRevokesTheAPIToken(t *testing.T) {
 		t.Error("the revoked token authenticated once the name was registered again")
 	}
 
+	// Any other token the API issued for the deleted name is refused too,
+	// not only the one the row held: the name was deleted.
+	other2, _ := testTokens.Issue("tdemo")
+	if err := svc.Delete(ctx, "tdemo"); err != nil {
+		t.Fatalf("delete again: %v", err)
+	}
+	if _, ok, _ := svc.Authenticate(ctx, other2); ok {
+		t.Error("a token for a deleted name, never held by its row, authenticated")
+	}
+
 	// A token for a name that was never deleted still restores.
 	other, _ := testTokens.Issue("eds")
 	if c, ok, err := svc.Authenticate(ctx, other); err != nil || !ok || c.Registered {
 		t.Fatalf("unregistered, never deleted: %+v %v %v", c, ok, err)
+	}
+}
+
+// A tenant deleted before deletes revoked anything left no hash; its name,
+// seeded from the audit log, refuses its token (0012_deleted_names.sql).
+func TestADeletedNameRefusesEveryToken(t *testing.T) {
+	svc, st, _ := tenanttest.NewService()
+	old, _ := testTokens.Issue("wtest")
+	st.MarkDeleted("wtest")
+	if _, ok, _ := svc.Authenticate(ctx, old); ok {
+		t.Fatal("a token for a deleted name authenticated")
+	}
+	req := tenant.CreateRequest{Name: "wtest", Index: 9, TSIGSecret: "c2VjcmV0c2VjcmV0c2VjcmV0", StateSecret: "statesecret", APIToken: old}
+	var inv *tenant.InvalidError
+	if _, err := svc.Create(ctx, req); !errors.As(err, &inv) {
+		t.Fatalf("operator restore of a deleted name: %v, want an InvalidError", err)
+	}
+	// Admission brings it back with a new token, which works.
+	res, err := svc.Create(ctx, tenant.CreateRequest{Name: "wtest"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if c, ok, err := svc.Authenticate(ctx, res.Issued.APIToken); err != nil || !ok || !c.Registered {
+		t.Fatalf("new token: %+v %v %v", c, ok, err)
 	}
 }
 
