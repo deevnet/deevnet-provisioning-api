@@ -119,7 +119,7 @@ test-integration:
 	  -v $(IT_GRAFANA_DIR)/plugins:/var/lib/grafana/plugins:ro,Z -v $(IT_GRAFANA_DIR)/tls:/tls:ro,Z \
 	  -e GF_SERVER_PROTOCOL=https -e GF_SERVER_CERT_FILE=/tls/cert.pem -e GF_SERVER_CERT_KEY=/tls/key.pem \
 	  -e GF_SECURITY_ADMIN_PASSWORD=it-admin-pw -e GF_PLUGINS_PREINSTALL_DISABLED=true \
-	  -e GF_AUTH_ANONYMOUS_ENABLED=false -e GF_USERS_ALLOW_SIGN_UP=false $(IT_GRAFANA) >/dev/null
+	  -e GF_AUTH_ANONYMOUS_ENABLED=false -e GF_USERS_ALLOW_SIGN_UP=false -e GF_UNIFIED_ALERTING_ENABLED=false $(IT_GRAFANA) >/dev/null
 	@for i in $$(seq 1 30); do podman exec $(IT_PREFIX)-pg pg_isready -U it -d it >/dev/null 2>&1 && break; sleep 1; done
 	@for i in $$(seq 1 60); do curl -sf --cacert $(IT_GRAFANA_DIR)/tls/cert.pem https://127.0.0.1:23000/api/health >/dev/null && break; sleep 1; done
 	@sleep 3

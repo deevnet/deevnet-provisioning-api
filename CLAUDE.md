@@ -88,7 +88,10 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
 - **Grafana 13 quirks the client is built around** (verified against 13.2.2 by
   `make test-integration`): `users.auto_assign_org` must stay ON or `OrgId` on user create is ignored
   and a personal organisation named for the login is made; `DELETE /api/orgs/<id>` answers 500
-  (grafana/grafana#127386), so Remove renames the emptied organisation instead.
+  (grafana/grafana#127386), so Remove renames the emptied organisation instead; and with alerting
+  off, as the site runs it (ADR-0024 §3), `DELETE /api/folders/<uid>?forceDeleteRules=true` is 403
+  even for the server admin, so folders are deleted without it. The integration Grafana runs with
+  `GF_UNIFIED_ALERTING_ENABLED=false` for that reason: keep it configured like the site's.
 - **The router's DHCP reservations have two writers.** Inventory's rows start "Ansible managed", the
   API's "Deevnet API - ", and each leaves the other's alone. The Kea client finds its own row by its
   exact description and refuses a MAC or address any other row on the subnet holds. Don't key it by
