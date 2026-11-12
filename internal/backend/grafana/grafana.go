@@ -239,7 +239,7 @@ func (c *Client) Remove(ctx context.Context, name string) error {
 }
 
 // emptyOrg deletes everything a tenant's login can make in its organisation:
-// folders, with the alert rules in them; dashboards outside any folder;
+// folders and what is in them; dashboards outside any folder;
 // library panels; snapshots, which hold the query results they were taken
 // with; and annotations. Each list is read again until it is empty, so a
 // rerun after a failure part way finishes the job.
@@ -256,13 +256,16 @@ func (c *Client) emptyOrg(ctx context.Context, org int) error {
 		return nil
 	}
 
-	// Deleting a folder deletes what is in it, nested folders included.
+	// Deleting a folder deletes what is in it, nested folders included. No
+	// forceDeleteRules: the site runs with Grafana's alerting off (ADR-0024
+	// §3), so a tenant has no alert rules, and with alerting off Grafana 13
+	// refuses that parameter outright (403), even to the server admin.
 	var folders []item
 	if err := c.do(ctx, http.MethodGet, "/api/folders?limit=1000", org, nil, &folders); err != nil {
 		return fmt.Errorf("folders: %w", err)
 	}
 	for _, f := range folders {
-		if err := del("folder "+f.UID, "/api/folders/"+url.PathEscape(f.UID)+"?forceDeleteRules=true"); err != nil {
+		if err := del("folder "+f.UID, "/api/folders/"+url.PathEscape(f.UID)); err != nil {
 			return err
 		}
 	}
