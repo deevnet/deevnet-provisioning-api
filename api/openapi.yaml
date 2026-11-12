@@ -317,8 +317,9 @@ paths:
         **Callers:** operator, or the tenant itself.
 
         Removes the tenant's broker accounts, device address reservations, resolver forwards,
-        zones, DNS update key, state-store user and policy, dashboard login and organization, then
-        its registry row. State objects stay in the bucket.
+        zones, DNS update key, state-store user and policy, every version of its state objects,
+        dashboard login and organization with everything the tenant saved in it, then its
+        registry row.
 
         The row goes together with the tenant's API token: from then on the token is refused
         everywhere, including to create the tenant again.

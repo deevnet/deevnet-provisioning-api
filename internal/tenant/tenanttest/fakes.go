@@ -654,12 +654,14 @@ func (s *Store) DeleteRecord(_ context.Context, tenantName, name string) error {
 type Backends struct {
 	mu sync.Mutex
 
-	DNSTenants   map[string]tenant.DNSTenant
-	DNSRecords   map[string]tenant.DNSRecord
-	Networks     map[string]tenant.NetworkSpec
-	Workloads    map[int]tenant.WorkloadSpec
-	Forwards     map[string]tenant.Forward
-	States       map[string]tenant.StateTenant
+	DNSTenants map[string]tenant.DNSTenant
+	DNSRecords map[string]tenant.DNSRecord
+	Networks   map[string]tenant.NetworkSpec
+	Workloads  map[int]tenant.WorkloadSpec
+	Forwards   map[string]tenant.Forward
+	States     map[string]tenant.StateTenant
+	// Purged is every "<bucket>/<prefix>" a delete purged.
+	Purged       []string
 	FabricClaims []tenant.Claim
 
 	// WiFiKeys is keyed "<ssid>/<name>", which is how the controller identifies
@@ -919,6 +921,16 @@ func (f stateFake) Remove(_ context.Context, user string) error {
 		return f.b.FailState
 	}
 	delete(f.b.States, user)
+	return nil
+}
+
+func (f stateFake) Purge(_ context.Context, bucket, prefix string) error {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	if f.b.FailState != nil {
+		return f.b.FailState
+	}
+	f.b.Purged = append(f.b.Purged, bucket+"/"+prefix)
 	return nil
 }
 

@@ -7,6 +7,8 @@
 //   - re-attaching an attached policy answers XMinioAdminPolicyChangeAlreadyApplied
 //   - a user whose policy grants only the admin actions in the deevnet_api role
 //     can do all of the above
+//   - with the S3 statement the minio role adds for it, the same user can list
+//     and delete every version under tenants/, and nothing outside it (Purge)
 package minio
 
 import (
@@ -18,8 +20,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/minio/madmin-go/v3"
+	miniogo "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
@@ -28,6 +32,9 @@ import (
 // Client is a tenant.StateStore.
 type Client struct {
 	admin *madmin.AdminClient
+	// s3 deletes a removed tenant's state objects (Purge), with the same
+	// credential and connection settings as admin.
+	s3 *miniogo.Client
 }
 
 // New takes host:port, for example 10.20.25.20:9000, and the API's own admin
@@ -62,7 +69,11 @@ func New(endpoint, accessKey, secretKey string, useTLS bool, caFile string) (*Cl
 	if err != nil {
 		return nil, err
 	}
-	return &Client{admin: a}, nil
+	s3, err := miniogo.New(endpoint, &miniogo.Options{Creds: opts.Creds, Secure: opts.Secure, Transport: opts.Transport})
+	if err != nil {
+		return nil, err
+	}
+	return &Client{admin: a, s3: s3}, nil
 }
 
 // PolicyName is the canned policy that confines one tenant, the same name the
@@ -130,6 +141,60 @@ func (c *Client) Remove(ctx context.Context, user string) error {
 	}
 	if err := c.admin.RemoveCannedPolicy(ctx, PolicyName(user)); err != nil && !hasCode(err, "XMinioAdminNoSuchPolicy") {
 		return fmt.Errorf("remove policy %s: %w", PolicyName(user), err)
+	}
+	return nil
+}
+
+// Purge deletes every version of every object under a removed tenant's
+// prefix, and every delete marker, so nothing of its state is left in the
+// versioned bucket (CHG-0065). A plain delete would only add delete markers,
+// with every earlier state, credentials and all, kept underneath them.
+//
+// The prefix must be a tenant's: "tenants/<name>/". Anything else is refused
+// here, as it is by the API user's policy on the store, because an empty or
+// shorter prefix would reach other tenants' state or the fabric's.
+func (c *Client) Purge(ctx context.Context, bucket, prefix string) error {
+	name, ok := strings.CutPrefix(prefix, "tenants/")
+	if !ok || !strings.HasSuffix(name, "/") || !tenant.ValidName(strings.TrimSuffix(name, "/")) {
+		return fmt.Errorf("refusing to purge %q: not a tenant's state prefix", prefix)
+	}
+	listCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	found := c.s3.ListObjects(listCtx, bucket, miniogo.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true})
+	toDelete := make(chan miniogo.ObjectInfo)
+	var listErr error
+	go func() {
+		defer close(toDelete)
+		for o := range found {
+			if o.Err != nil {
+				listErr = o.Err
+				cancel()
+				return
+			}
+			select {
+			case toDelete <- o:
+			case <-listCtx.Done():
+				return
+			}
+		}
+	}()
+	for e := range c.s3.RemoveObjects(ctx, bucket, toDelete, miniogo.RemoveObjectsOptions{}) {
+		if e.Err != nil {
+			cancel()
+			for range toDelete {
+			}
+			return fmt.Errorf("delete %s version %s: %w", e.ObjectName, e.VersionID, e.Err)
+		}
+	}
+	if listErr != nil {
+		return fmt.Errorf("list versions under %s: %w", prefix, listErr)
+	}
+	// What a purge is for is "nothing left", so that is what it checks.
+	for o := range c.s3.ListObjects(ctx, bucket, miniogo.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true, MaxKeys: 1}) {
+		if o.Err != nil {
+			return fmt.Errorf("list versions under %s: %w", prefix, o.Err)
+		}
+		return fmt.Errorf("purge left %s version %s under %s", o.Key, o.VersionID, prefix)
 	}
 	return nil
 }

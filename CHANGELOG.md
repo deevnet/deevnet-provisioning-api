@@ -17,12 +17,25 @@ One tag covers everything this repository builds: the API, the two writers
   revoked token is answered `401`, or `400` when an operator's restore carries it. A tenant admitted
   again under the name gets a new token. A restore after a genuinely lost registry is unchanged;
   the table is lost with it, so a token deleted before that loss would be accepted again.
+- **Deleting a tenant deletes its Terraform state** (CHG-0065): every version and delete marker
+  under `tenants/<name>/` in the state bucket, after the tenant's state-store user is removed. It
+  used to stay in the bucket until the operator ran `make purge-tenant-state`. The purge refuses
+  any prefix that is not a tenant's.
+- **Deleting a tenant empties its Grafana organization** (CHG-0065): folders (with their alert
+  rules), dashboards, library panels, snapshots and annotations go before the organization is
+  renamed `deleted-<name>-<id>`. The renamed organization used to keep whatever the tenant had
+  saved.
 
 ### Upgrading
 
 - Migration `0011_revoked_tokens.sql` runs on start. A tenant deleted before this release left no
   hash behind, so this does not cover its token: the token can still create its name. The
   audit log's `delete` entries name those tenants.
+- The API's MinIO user needs `s3:ListBucket` and `s3:ListBucketVersions` on the state bucket for
+  prefix `tenants/*`, and `s3:DeleteObject` and `s3:DeleteObjectVersion` on `tenants/*`. Apply the
+  `deevnet.mgmt` minio role that grants them **before** deploying this release; without them a
+  tenant delete stops at the `state` step with a 502, and a second delete resumes it once the
+  policy is in place.
 
 ## 0.19.0 (2026-11-09)
 

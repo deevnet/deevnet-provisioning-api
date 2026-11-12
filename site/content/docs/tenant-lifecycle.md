@@ -133,11 +133,17 @@ row.** The operator or the tenant itself may call it.
 
 | Status | When |
 |---|---|
-| `204` | the broker accounts, address reservations, resolver forwards, zones, update key, state-store user and dashboard login are removed. State objects stay in the bucket |
+| `204` | the broker accounts, address reservations, resolver forwards, zones, update key, state-store user, every version of the tenant's state objects, and the dashboard login and organization are removed, along with everything the tenant saved there. The tenant's API token is revoked |
 | `409` | the tenant still has workloads, or the fabric still carries a zone of this name. The tenant destroys its own resources first |
 | `404` | not registered |
 | `502` | a backend step failed. The tenant is left `deleting`, and a second delete resumes it |
 
 The dashboard server cannot delete an organization
 ([grafana/grafana#127386](https://github.com/grafana/grafana/issues/127386)), so the emptied one is
-renamed `deleted-<tenant>-<id>`, which frees the name for a tenant created again.
+renamed `deleted-<tenant>-<id>`, which frees the name for a tenant created again. Its folders,
+dashboards, library panels, snapshots and annotations are deleted first, so nothing is left in it.
+
+**A deleted tenant's token is refused, including to create the tenant again.** A token verifies
+without the registry so that a tenant can restore itself after a lost registry; the delete records
+the token as revoked, so it is not taken for one. A tenant admitted again under the name is issued a
+new token.

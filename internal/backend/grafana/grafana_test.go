@@ -184,11 +184,55 @@ func TestEnsureBuildsTheTenantsOrganisationAndRemoves(t *testing.T) {
 		t.Fatalf("after a second ensure the title is %q (%v); the tenant's edit was overwritten", got.Dashboard.Title, err)
 	}
 
+	// Everything the tenant can make, which the remove must take with it
+	// (CHG-0065): a folder with a dashboard and a library panel in it, and an
+	// annotation, on top of the starter dashboard.
+	var folder struct {
+		UID string `json:"uid"`
+	}
+	if err := asUser(t, c, tt.Name, tt2.Password, http.MethodPost, "/api/folders", org, map[string]any{"title": "Mine"}, &folder); err != nil {
+		t.Fatalf("the tenant cannot make a folder: %v", err)
+	}
+	inFolder := map[string]any{"dashboard": map[string]any{"uid": "tprobe-inner", "title": "Inner"}, "folderUid": folder.UID}
+	if err := asUser(t, c, tt.Name, tt2.Password, http.MethodPost, "/api/dashboards/db", org, inFolder, nil); err != nil {
+		t.Fatalf("dashboard in a folder: %v", err)
+	}
+	panel := map[string]any{"name": "probe-panel", "kind": 1, "folderUid": folder.UID, "model": map[string]any{"type": "text", "title": "probe"}}
+	if err := asUser(t, c, tt.Name, tt2.Password, http.MethodPost, "/api/library-elements", org, panel, nil); err != nil {
+		t.Fatalf("library panel: %v", err)
+	}
+	// Snapshots are not here: an Editor is refused one (403 on 13.2.2), so a
+	// tenant cannot leave any. Remove deletes them anyway, in case it can.
+	note := map[string]any{"text": "a tenant's note", "tags": []string{"probe"}}
+	if err := asUser(t, c, tt.Name, tt2.Password, http.MethodPost, "/api/annotations", org, note, nil); err != nil {
+		t.Fatalf("annotation: %v", err)
+	}
+
 	if err := c.Remove(ctx, tt.Name); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if err := c.Remove(ctx, tt.Name); err != nil {
 		t.Fatalf("remove again: %v", err)
+	}
+	// Whether the organisation was deleted or only renamed, nothing of the
+	// tenant's is left in it. An organisation that is gone answers these with
+	// empty lists or an error; either is nothing left.
+	for _, path := range []string{
+		"/api/folders", "/api/search?type=dash-db", "/api/search?deleted=true",
+		"/api/dashboard/snapshots", "/api/annotations",
+	} {
+		var left []map[string]any
+		if err := c.do(ctx, http.MethodGet, path, org, nil, &left); err == nil && len(left) != 0 {
+			t.Errorf("%s after remove: %v", path, left)
+		}
+	}
+	var panels struct {
+		Result struct {
+			Elements []map[string]any `json:"elements"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/library-elements", org, nil, &panels); err == nil && len(panels.Result.Elements) != 0 {
+		t.Errorf("library panels after remove: %v", panels.Result.Elements)
 	}
 	if _, err := c.lookupOrg(ctx, tt.Name); err != errNotFound {
 		t.Fatalf("organisation after remove: %v", err)

@@ -408,6 +408,9 @@ type StateTenant struct {
 type StateStore interface {
 	Ensure(ctx context.Context, t StateTenant) error
 	Remove(ctx context.Context, user string) error
+	// Purge deletes every version of every object under a removed tenant's
+	// prefix (CHG-0065). Nothing left is success.
+	Purge(ctx context.Context, bucket, prefix string) error
 }
 
 // WiFiKeySpec is one PPSK key as the wireless controller needs it. The VLAN is

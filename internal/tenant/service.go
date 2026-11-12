@@ -495,7 +495,15 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		{StepNetwork, func() error { return s.removeNetwork(ctx, rec) }},
 		{StepResolver, func() error { return s.Resolver.Remove(ctx, s.zones(rec)) }},
 		{StepDNS, func() error { return s.DNS.Remove(ctx, s.dnsTenant(rec)) }},
-		{StepState, func() error { return s.State.Remove(ctx, rec.Name) }},
+		// The user first, so a tenant's own destroy still running cannot
+		// write again; then everything it wrote, every version (CHG-0065).
+		{StepState, func() error {
+			if err := s.State.Remove(ctx, rec.Name); err != nil {
+				return err
+			}
+			st := s.stateTenant(rec)
+			return s.State.Purge(ctx, st.Bucket, st.Prefix)
+		}},
 	}
 	if s.LogWriter != nil {
 		steps = append([]struct {

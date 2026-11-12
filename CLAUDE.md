@@ -44,8 +44,9 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   renders the file as Release Notes. A new required variable or a changed default goes under
   `### Upgrading`.
 - **Standard library first.** Routing is `net/http`'s `ServeMux` with method patterns. The
-  dependencies are `pgx/v5` and `madmin-go/v3`, whose admin API encrypts request bodies, which is
-  not worth reimplementing. Don't add a router or framework to get what the mux already does.
+  dependencies are `pgx/v5`, `madmin-go/v3`, whose admin API encrypts request bodies, which is
+  not worth reimplementing, and `minio-go/v7`, which `madmin-go` already brings, for purging a
+  deleted tenant's versioned state. Don't add a router or framework to get what the mux already does.
 - **Every backend call is an ensure.** Read, compare, write only the difference, and treat
   "already exists" or "not found" as success where that is the goal. A create that failed half way
   is resumed by calling it again, and existing objects (eds's, from Ansible) are adopted.
