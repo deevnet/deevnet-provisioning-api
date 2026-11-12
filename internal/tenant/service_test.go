@@ -401,6 +401,10 @@ func TestDeleteRemovesEverything(t *testing.T) {
 	if len(b.DNSTenants)+len(b.Forwards)+len(b.States) != 0 {
 		t.Errorf("left behind: dns %v forwards %v state %v", b.DNSTenants, b.Forwards, b.States)
 	}
+	// Its state objects too, not only the user that wrote them (CHG-0065).
+	if len(b.Purged) != 1 || !strings.HasSuffix(b.Purged[0], "/tenants/tdemo/") {
+		t.Errorf("purged %v, want the tenant's state prefix once", b.Purged)
+	}
 	if _, err := st.Get(ctx, "tdemo"); !errors.Is(err, tenant.ErrNotFound) {
 		t.Errorf("registry row survived: %v", err)
 	}

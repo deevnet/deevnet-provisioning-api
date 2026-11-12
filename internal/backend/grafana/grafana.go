@@ -214,6 +214,11 @@ func (c *Client) Remove(ctx context.Context, name string) error {
 	case org == 1:
 		return errors.New("refusing to delete organisation 1, the operator's")
 	}
+	// What the tenant made goes first (CHG-0065). The organisation is only
+	// renamed below, so anything left in it would outlive the tenant.
+	if err := c.emptyOrg(ctx, org); err != nil {
+		return err
+	}
 	// The data sources first: they hold the read token, and if the
 	// organisation itself cannot be deleted they must not outlive the tenant.
 	for _, ds := range DataSources {
@@ -233,10 +238,84 @@ func (c *Client) Remove(ctx context.Context, name string) error {
 	}
 }
 
+// emptyOrg deletes everything a tenant's login can make in its organisation:
+// folders, with the alert rules in them; dashboards outside any folder;
+// library panels; snapshots, which hold the query results they were taken
+// with; and annotations. Each list is read again until it is empty, so a
+// rerun after a failure part way finishes the job.
+func (c *Client) emptyOrg(ctx context.Context, org int) error {
+	type item struct {
+		UID string `json:"uid"`
+		Key string `json:"key"`
+		ID  int    `json:"id"`
+	}
+	del := func(what, path string) error {
+		if err := c.do(ctx, http.MethodDelete, path, org, nil, nil); err != nil && !isStatus(err, 404) {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		return nil
+	}
+
+	// Deleting a folder deletes what is in it, nested folders included.
+	var folders []item
+	if err := c.do(ctx, http.MethodGet, "/api/folders?limit=1000", org, nil, &folders); err != nil {
+		return fmt.Errorf("folders: %w", err)
+	}
+	for _, f := range folders {
+		if err := del("folder "+f.UID, "/api/folders/"+url.PathEscape(f.UID)+"?forceDeleteRules=true"); err != nil {
+			return err
+		}
+	}
+
+	var dashboards []item
+	if err := c.do(ctx, http.MethodGet, "/api/search?type=dash-db&limit=5000", org, nil, &dashboards); err != nil {
+		return fmt.Errorf("dashboards: %w", err)
+	}
+	for _, d := range dashboards {
+		if err := del("dashboard "+d.UID, "/api/dashboards/uid/"+url.PathEscape(d.UID)); err != nil {
+			return err
+		}
+	}
+
+	var panels struct {
+		Result struct {
+			Elements []item `json:"elements"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/library-elements?perPage=1000", org, nil, &panels); err != nil {
+		return fmt.Errorf("library panels: %w", err)
+	}
+	for _, p := range panels.Result.Elements {
+		if err := del("library panel "+p.UID, "/api/library-elements/"+url.PathEscape(p.UID)); err != nil {
+			return err
+		}
+	}
+
+	var snapshots []item
+	if err := c.do(ctx, http.MethodGet, "/api/dashboard/snapshots?limit=1000", org, nil, &snapshots); err != nil {
+		return fmt.Errorf("snapshots: %w", err)
+	}
+	for _, sn := range snapshots {
+		if err := del("snapshot", "/api/snapshots/"+url.PathEscape(sn.Key)); err != nil {
+			return err
+		}
+	}
+
+	var annotations []item
+	if err := c.do(ctx, http.MethodGet, "/api/annotations?limit=5000", org, nil, &annotations); err != nil {
+		return fmt.Errorf("annotations: %w", err)
+	}
+	for _, a := range annotations {
+		if err := del("annotation", "/api/annotations/"+strconv.Itoa(a.ID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // retireOrg renames an organisation the server will not delete, so the name
 // is free for a tenant created again under it. By this point it holds no
-// data source and no tenant login, only whatever dashboards the tenant left,
-// which read nothing. When the upstream fix ships, the delete above succeeds
+// data source, no tenant login and nothing the tenant made: it is empty. When the upstream fix ships, the delete above succeeds
 // and this is never reached.
 func (c *Client) retireOrg(ctx context.Context, name string, org int) error {
 	retired := fmt.Sprintf("deleted-%s-%d", name, org)
