@@ -133,7 +133,7 @@ row.** The operator or the tenant itself may call it.
 
 | Status | When |
 |---|---|
-| `204` | the broker accounts, address reservations, resolver forwards, zones, update key, state-store user, every version of the tenant's state objects, and the dashboard login and organization are removed, along with everything the tenant saved there. The tenant's API token is revoked |
+| `204` | the broker accounts, address reservations, resolver forwards, zones, update key, state-store user, every version of the tenant's state objects, its log users and every log line in its partitions, and the dashboard login and organization are removed, along with everything the tenant saved there. The tenant's API token is revoked |
 | `409` | the tenant still has workloads, or the fabric still carries a zone of this name. The tenant destroys its own resources first |
 | `404` | not registered |
 | `502` | a backend step failed. The tenant is left `deleting`, and a second delete resumes it |

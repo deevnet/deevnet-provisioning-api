@@ -491,6 +491,12 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		if err != nil {
 			return wiring{}, err
 		}
+		// Longer than the writer's own purge bound (120s by default), so the
+		// writer's answer ends a slow purge rather than this deadline.
+		purge, err := durationEnv(getenv, "DEEVNET_LOG_PURGE_TIMEOUT", 150*time.Second)
+		if err != nil {
+			return wiring{}, err
+		}
 		w, err := logwriter.New(logwriter.Config{
 			Addr:           getenv("DEEVNET_LOG_WRITER_ADDR"),
 			User:           getenv("DEEVNET_LOG_WRITER_USER"),
@@ -498,6 +504,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			HostKey:        getenv("DEEVNET_LOG_HOST_KEY"),
 			ConnectTimeout: connect,
 			SessionTimeout: session,
+			PurgeTimeout:   purge,
 		})
 		if err != nil {
 			return wiring{}, fmt.Errorf("log store user writer: %w", err)

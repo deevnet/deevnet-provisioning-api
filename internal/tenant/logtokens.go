@@ -56,5 +56,10 @@ func (s *Service) removeLogTokens(ctx context.Context, rec Record) error {
 	if s.LogWriter == nil {
 		return nil
 	}
-	return s.LogWriter.Remove(ctx, rec.Name, rec.Index)
+	// The users first, so nothing writes while the lines are deleted; then the
+	// lines, before the registry frees the index for another tenant (CHG-0065).
+	if err := s.LogWriter.Remove(ctx, rec.Name, rec.Index); err != nil {
+		return err
+	}
+	return s.LogWriter.Purge(ctx, rec.Name, rec.Index)
 }

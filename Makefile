@@ -94,13 +94,16 @@ IT_MINIO     := quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
 IT_GRAFANA        := docker.io/grafana/grafana:13.2.2
 IT_GRAFANA_PLUGIN := $(ARTIFACTS_ROOT)/grafana-plugins/victoriametrics-logs-datasource-v0.32.0.zip
 IT_GRAFANA_DIR    := /tmp/$(IT_PREFIX)-grafana
+# The log store, with the delete API on as the site runs it (CHG-0065).
+IT_VL        := docker.io/victoriametrics/victoria-logs:v1.52.0
 
 test-integration:
 	@podman image exists $(IT_PG)    || podman load -q -i $(IT_IMAGES)/postgres/postgres-17.11.tar
 	@podman image exists $(IT_PDNS)  || podman load -q -i $(IT_IMAGES)/pdns-auth/pdns-auth-4.9.17.tar
 	@podman image exists $(IT_MINIO) || podman load -q -i $(IT_IMAGES)/minio/minio-RELEASE.2025-09-07T16-13-09Z.tar
 	@podman image exists $(IT_GRAFANA) || podman load -q -i $(IT_IMAGES)/grafana/grafana-13.2.2.tar
-	@podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio $(IT_PREFIX)-grafana >/dev/null 2>&1 || true
+	@podman image exists $(IT_VL) || podman load -q -i $(IT_IMAGES)/victoria-logs/victoria-logs-v1.52.0.tar
+	@podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio $(IT_PREFIX)-grafana $(IT_PREFIX)-vl >/dev/null 2>&1 || true
 	@rm -rf $(IT_GRAFANA_DIR) && mkdir -p $(IT_GRAFANA_DIR)/plugins $(IT_GRAFANA_DIR)/tls
 	@unzip -q $(IT_GRAFANA_PLUGIN) -d $(IT_GRAFANA_DIR)/plugins
 	@openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=localhost \
@@ -120,6 +123,7 @@ test-integration:
 	  -e GF_SERVER_PROTOCOL=https -e GF_SERVER_CERT_FILE=/tls/cert.pem -e GF_SERVER_CERT_KEY=/tls/key.pem \
 	  -e GF_SECURITY_ADMIN_PASSWORD=it-admin-pw -e GF_PLUGINS_PREINSTALL_DISABLED=true \
 	  -e GF_AUTH_ANONYMOUS_ENABLED=false -e GF_USERS_ALLOW_SIGN_UP=false -e GF_UNIFIED_ALERTING_ENABLED=false $(IT_GRAFANA) >/dev/null
+	podman run -d --name $(IT_PREFIX)-vl -p 127.0.0.1:29428:9428 $(IT_VL) -delete.enable >/dev/null
 	@for i in $$(seq 1 30); do podman exec $(IT_PREFIX)-pg pg_isready -U it -d it >/dev/null 2>&1 && break; sleep 1; done
 	@for i in $$(seq 1 60); do curl -sf --cacert $(IT_GRAFANA_DIR)/tls/cert.pem https://127.0.0.1:23000/api/health >/dev/null && break; sleep 1; done
 	@sleep 3
@@ -129,8 +133,9 @@ test-integration:
 	DEEVNET_TEST_MINIO_ACCESS_KEY=it-root DEEVNET_TEST_MINIO_SECRET_KEY=it-root-secret \
 	DEEVNET_TEST_GRAFANA_URL=https://127.0.0.1:23000 DEEVNET_TEST_GRAFANA_PASSWORD=it-admin-pw \
 	DEEVNET_TEST_GRAFANA_CA=$(IT_GRAFANA_DIR)/tls/cert.pem \
+	DEEVNET_TEST_VL_URL=http://127.0.0.1:29428 \
 	go test -count=1 -p 1 ./... ; rc=$$?; \
-	podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio $(IT_PREFIX)-grafana >/dev/null; \
+	podman rm -f $(IT_PREFIX)-pg $(IT_PREFIX)-pdns $(IT_PREFIX)-minio $(IT_PREFIX)-grafana $(IT_PREFIX)-vl >/dev/null; \
 	rm -rf $(IT_GRAFANA_DIR); exit $$rc
 
 vet:

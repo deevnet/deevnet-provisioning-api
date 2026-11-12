@@ -35,6 +35,11 @@ const Version = 1
 const (
 	OpPut    = "put"
 	OpDelete = "delete"
+	// OpPurge deletes every log line in the tenant's three partitions
+	// (CHG-0065). It is sent after OpDelete, so nothing can write there while
+	// it runs, and the writer refuses it while any tenant's users still name
+	// the index.
+	OpPurge = "purge"
 )
 
 // Bounds. The writer reads from a network peer, so every field is bounded.
@@ -148,7 +153,7 @@ func (r Request) Validate() error {
 		return fmt.Errorf("unsupported version %d, this writer speaks %d", r.Version, Version)
 	}
 	switch r.Op {
-	case OpPut, OpDelete:
+	case OpPut, OpDelete, OpPurge:
 	default:
 		return fmt.Errorf("unknown op %q", r.Op)
 	}
@@ -158,12 +163,13 @@ func (r Request) Validate() error {
 	if r.Index < 1 || r.Index > MaxIndex {
 		return fmt.Errorf("index %d is outside 1..%d; 0 is the substrate partition and is never a tenant", r.Index, MaxIndex)
 	}
-	if r.Op == OpDelete {
+	if r.Op == OpDelete || r.Op == OpPurge {
 		// A delete carries identity only. Tokens on a delete would mean the
 		// caller thinks it is removing one particular credential, which this
-		// operation does not do: it removes the tenant's users.
+		// operation does not do: it removes the tenant's users. A purge
+		// likewise removes everything in the partitions, not one token's.
 		if r.IngestToken != "" || r.ReadToken != "" {
-			return fmt.Errorf("a delete carries no tokens")
+			return fmt.Errorf("a %s carries no tokens", r.Op)
 		}
 		return nil
 	}

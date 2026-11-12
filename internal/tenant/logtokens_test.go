@@ -3,6 +3,7 @@ package tenant_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
@@ -113,5 +114,9 @@ func TestDeleteRemovesTheTenantFromTheStore(t *testing.T) {
 	}
 	if _, ok := b.LogTenants["eds"]; ok {
 		t.Error("the store still holds the tenant's users")
+	}
+	// And its lines, after the users and under its own index (CHG-0065).
+	if len(b.LogPurged) != 1 || !strings.HasPrefix(b.LogPurged[0], "eds:") {
+		t.Errorf("purged %v, want eds's partitions once", b.LogPurged)
 	}
 }
