@@ -57,6 +57,10 @@ type LogTenant struct {
 type LogWriter interface {
 	Put(ctx context.Context, t LogTenant) error
 	Remove(ctx context.Context, name string, index int) error
+	// Purge deletes every log line in a removed tenant's partitions
+	// (CHG-0065). It is called after Remove, and the writer refuses it while
+	// any tenant's users still name the index.
+	Purge(ctx context.Context, name string, index int) error
 }
 
 // DashTenant is one tenant's organisation in the dashboard server (ADR-0024,

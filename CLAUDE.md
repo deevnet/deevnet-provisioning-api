@@ -103,7 +103,8 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
 - **Two writers, two hosts, two keys.** Broker accounts go to the messaging VM as a bcrypt hash;
   log tokens go to the observability store as the token itself, because vmauth compares what it was
   configured with. Both are one request and one answer to a program pinned with `command=`. Neither
-  key may be reused for the other.
+  key may be reused for the other. The log writer also purges a deleted tenant's lines, through
+  VictoriaLogs' delete API on the store's loopback listener: vmauth must never route `/delete/*`.
 - **The log store's `auth.yml` has two authors.** Ansible owns `base.json`, the writer owns
   `users.d/<tenant>.json`, and `deevnet-log-user` renders the file from both. Don't make either side
   write `auth.yml` directly.

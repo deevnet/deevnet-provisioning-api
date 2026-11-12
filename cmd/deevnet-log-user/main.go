@@ -3,7 +3,8 @@
 // It is invoked two ways, and both render the same file from the same inputs:
 //
 //   - by sshd, as a forced command, with one logauth.Request on stdin. That is
-//     the Deevnet API adding or removing one tenant's users (CHG-0020).
+//     the Deevnet API adding or removing one tenant's users (CHG-0020), or
+//     purging a deleted tenant's log lines (CHG-0065).
 //   - by Ansible, as "--render", after it has written the base file. That is
 //     the substrate re-asserting the store's configuration. "--render
 //     --no-reload" renders without asking vmauth to re-read it, which is how
@@ -34,9 +35,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +64,15 @@ type config struct {
 	// program needs no privilege to ask for a reload.
 	ReloadURL      string `json:"reload_url"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
+	// StoreURL is VictoriaLogs' own loopback listener, which serves the delete
+	// API (-delete.enable). Empty: this host does not purge, and a purge
+	// request is refused. vmauth does not route /delete/*, so this program is
+	// the only caller of it that a network peer can reach (CHG-0065).
+	StoreURL string `json:"store_url,omitempty"`
+	// PurgeTimeoutSeconds bounds a purge, which waits for the store's delete
+	// tasks to finish: they rewrite stored data, so they take longer than a
+	// reload.
+	PurgeTimeoutSeconds int `json:"purge_timeout_seconds,omitempty"`
 }
 
 // base is the half of the configuration the substrate owns.
@@ -136,9 +148,6 @@ func run() logauth.Response {
 		return resp
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout())
-	defer cancel()
-
 	req, err := logauth.Decode(os.Stdin)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "decoding request:", err)
@@ -150,6 +159,24 @@ func run() logauth.Response {
 		resp.Message = err.Error()
 		return resp
 	}
+
+	if req.Op == logauth.OpPurge {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.purgeTimeout())
+		defer cancel()
+		if err := purge(ctx, cfg, req); err != nil {
+			fmt.Fprintln(os.Stderr, "purging:", err)
+			resp.Message = "the tenant's log lines could not be purged"
+			if errors.Is(err, errPurgeRefused) {
+				resp.Message = err.Error()
+			}
+			return resp
+		}
+		resp.OK = true
+		return resp
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout())
+	defer cancel()
 
 	path := filepath.Join(cfg.UsersDir, req.Tenant+".json")
 	existed := fileExists(path)
@@ -400,6 +427,159 @@ func (c config) timeout() time.Duration {
 		return 10 * time.Second
 	}
 	return time.Duration(c.TimeoutSeconds) * time.Second
+}
+
+func (c config) purgeTimeout() time.Duration {
+	if c.PurgeTimeoutSeconds <= 0 {
+		return 120 * time.Second
+	}
+	return time.Duration(c.PurgeTimeoutSeconds) * time.Second
+}
+
+// errPurgeRefused is a purge this program will not run, as opposed to one the
+// store failed. Its message goes back to the caller.
+var errPurgeRefused = errors.New("purge refused")
+
+// deleteTask is one entry of the store's /delete/active_tasks.
+type deleteTask struct {
+	TaskID    string `json:"task_id"`
+	Filter    string `json:"filter"`
+	TenantIDs []struct {
+		AccountID int `json:"account_id"`
+		ProjectID int `json:"project_id"`
+	} `json:"tenant_ids"`
+}
+
+// purge deletes every log line in a deleted tenant's three partitions, through
+// VictoriaLogs' delete API (v1.52: POST /delete/run_task?filter=..., one task
+// per tenant, the tenant taken from the AccountID and ProjectID headers; the
+// task is done when /delete/active_tasks stops listing it).
+//
+// It refuses while any tenant file still names the index: that tenant's users
+// can still write there, or a new tenant already has the index, and either way
+// the lines are not the deleted tenant's to remove. The API sends the purge
+// after removing the users, and before the registry frees the index.
+//
+// A repeated purge converges: a task still running for a partition is waited
+// for rather than started again, and deleting from an empty partition is a
+// task that finishes at once.
+func purge(ctx context.Context, cfg config, req logauth.Request) error {
+	if cfg.StoreURL == "" {
+		return fmt.Errorf("%w: this host is not configured to purge (no store_url)", errPurgeRefused)
+	}
+	tenants, err := loadTenants(cfg.UsersDir)
+	if err != nil {
+		return err
+	}
+	for _, t := range tenants {
+		if t.Tenant == req.Tenant || t.Index == req.Index {
+			return fmt.Errorf("%w: tenant %s still has users for index %d", errPurgeRefused, t.Tenant, t.Index)
+		}
+	}
+
+	base := strings.TrimSuffix(cfg.StoreURL, "/")
+	active, err := activeDeleteTasks(ctx, base)
+	if err != nil {
+		return err
+	}
+	waiting := map[string]bool{}
+	for _, part := range req.ReadPartitions() {
+		account, project := part[0], part[1]
+		if id := runningTaskFor(active, account, project); id != "" {
+			waiting[id] = true
+			continue
+		}
+		id, err := runDeleteTask(ctx, base, account, project)
+		if err != nil {
+			return fmt.Errorf("partition %d:%d: %w", account, project, err)
+		}
+		waiting[id] = true
+	}
+
+	for {
+		active, err := activeDeleteTasks(ctx, base)
+		if err != nil {
+			return err
+		}
+		left := 0
+		for _, t := range active {
+			if waiting[t.TaskID] {
+				left++
+			}
+		}
+		if left == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%d delete tasks still running: %w", left, ctx.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// runningTaskFor is a task already deleting everything in one partition.
+func runningTaskFor(active []deleteTask, account, project int) string {
+	for _, t := range active {
+		if t.Filter != "*" || len(t.TenantIDs) != 1 {
+			continue
+		}
+		if t.TenantIDs[0].AccountID == account && t.TenantIDs[0].ProjectID == project {
+			return t.TaskID
+		}
+	}
+	return ""
+}
+
+func runDeleteTask(ctx context.Context, base string, account, project int) (string, error) {
+	body := strings.NewReader("filter=" + url.QueryEscape("*"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/delete/run_task", body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Both set, always: a missing header is VictoriaLogs' default 0, the
+	// substrate partition.
+	req.Header.Set("AccountID", strconv.Itoa(account))
+	req.Header.Set("ProjectID", strconv.Itoa(project))
+	var out struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := storeCall(req, &out); err != nil {
+		return "", err
+	}
+	if out.TaskID == "" {
+		return "", errors.New("the store started a delete task without an id")
+	}
+	return out.TaskID, nil
+}
+
+func activeDeleteTasks(ctx context.Context, base string) ([]deleteTask, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/delete/active_tasks", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []deleteTask
+	if err := storeCall(req, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func storeCall(req *http.Request, out any) error {
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", req.Method, req.URL.Path, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Path, resp.Status, strings.TrimSpace(string(raw)))
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("%s %s: decoding: %w", req.Method, req.URL.Path, err)
+	}
+	return nil
 }
 
 func loadBase(path string) (base, error) {

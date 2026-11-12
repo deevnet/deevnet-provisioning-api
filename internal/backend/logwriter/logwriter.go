@@ -51,6 +51,10 @@ type Config struct {
 	// here may hang.
 	ConnectTimeout time.Duration
 	SessionTimeout time.Duration
+	// PurgeTimeout bounds a purge, which waits for the store to finish
+	// rewriting its data. It is longer than the writer's own purge timeout, so
+	// the writer's answer, not this deadline, is what normally ends it.
+	PurgeTimeout time.Duration
 }
 
 // Client is a tenant.LogWriter.
@@ -73,7 +77,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("log writer private key is required")
 	case cfg.HostKey == "":
 		return nil, fmt.Errorf("log writer host key is required; this client will not connect without one")
-	case cfg.ConnectTimeout <= 0 || cfg.SessionTimeout <= 0:
+	case cfg.ConnectTimeout <= 0 || cfg.SessionTimeout <= 0 || cfg.PurgeTimeout <= 0:
 		return nil, fmt.Errorf("log writer timeouts must be positive")
 	}
 	signer, err := ssh.ParsePrivateKey(cfg.PrivateKey)
@@ -105,7 +109,20 @@ func (c *Client) Remove(ctx context.Context, name string, index int) error {
 	})
 }
 
+// Purge deletes every log line in the tenant's partitions (CHG-0065). Sent
+// after Remove; repeating it converges.
+func (c *Client) Purge(ctx context.Context, name string, index int) error {
+	return c.sendWithin(ctx, c.cfg.PurgeTimeout, logauth.Request{
+		Version: logauth.Version, Op: logauth.OpPurge,
+		Tenant: name, Index: index,
+	})
+}
+
 func (c *Client) send(ctx context.Context, req logauth.Request) error {
+	return c.sendWithin(ctx, c.cfg.SessionTimeout, req)
+}
+
+func (c *Client) sendWithin(ctx context.Context, timeout time.Duration, req logauth.Request) error {
 	// Validated here as well as at the far end, so a request the writer would
 	// refuse never becomes a 502 the tenant has to interpret.
 	if err := req.Validate(); err != nil {
@@ -136,7 +153,7 @@ func (c *Client) send(ctx context.Context, req logauth.Request) error {
 	// The command string is ignored: the key is pinned with command=, and the
 	// writer never reads SSH_ORIGINAL_COMMAND. It is sent because the protocol
 	// requires one, and named so sshd's log reads intelligibly.
-	runErr := c.runBounded(ctx, sess, "deevnet-log-user")
+	runErr := c.runBounded(ctx, sess, "deevnet-log-user", timeout)
 
 	var resp logauth.Response
 	decodeErr := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp)
@@ -159,8 +176,8 @@ func (c *Client) send(ctx context.Context, req logauth.Request) error {
 // runBounded runs the session under the context and makes sure a stalled
 // exchange ends: ssh.Session has no context-aware Run, so the deadline is
 // enforced by closing the session out from under it.
-func (c *Client) runBounded(ctx context.Context, sess *ssh.Session, cmd string) error {
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.SessionTimeout)
+func (c *Client) runBounded(ctx context.Context, sess *ssh.Session, cmd string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -175,7 +192,7 @@ func (c *Client) runBounded(ctx context.Context, sess *ssh.Session, cmd string) 
 		case <-done:
 		case <-time.After(2 * time.Second):
 		}
-		return fmt.Errorf("the writer did not finish within %s: %w", c.cfg.SessionTimeout, ctx.Err())
+		return fmt.Errorf("the writer did not finish within %s: %w", timeout, ctx.Err())
 	}
 }
 

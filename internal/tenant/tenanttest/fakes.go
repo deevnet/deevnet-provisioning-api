@@ -696,6 +696,8 @@ type Backends struct {
 	// tenant's users are (ADR-0027). A test can assert the index and the two
 	// tokens really crossed.
 	LogTenants map[string]tenant.LogTenant
+	// LogPurged is every "<name>:<index>" whose partitions were purged.
+	LogPurged []string
 	// LogErr, when set, is returned by every Put and Remove: the store being
 	// unreachable while a tenant is applying.
 	LogErr error
@@ -1101,6 +1103,22 @@ func (w *logWriter) Put(_ context.Context, lt tenant.LogTenant) error {
 	w.b.mu.Lock()
 	defer w.b.mu.Unlock()
 	w.b.LogTenants[lt.Name] = lt
+	return nil
+}
+
+// Purge refuses while the tenant's users are still there, as the writer does.
+func (w *logWriter) Purge(_ context.Context, name string, index int) error {
+	if w.b.LogErr != nil {
+		return w.b.LogErr
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	for _, lt := range w.b.LogTenants {
+		if lt.Name == name || lt.Index == index {
+			return fmt.Errorf("purge refused: tenant %s still has users for index %d", lt.Name, lt.Index)
+		}
+	}
+	w.b.LogPurged = append(w.b.LogPurged, fmt.Sprintf("%s:%d", name, index))
 	return nil
 }
 

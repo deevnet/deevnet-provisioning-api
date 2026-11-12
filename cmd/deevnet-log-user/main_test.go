@@ -180,3 +180,21 @@ func userBlock(t *testing.T, doc, name string) string {
 	}
 	return doc[start:]
 }
+
+// The store runs with its delete API on (CHG-0065), so vmauth is what keeps it
+// from every token: no rendered route may reach /delete/*, or anything but
+// /select and /insert.
+func TestNoRouteReachesTheDeleteAPI(t *testing.T) {
+	doc := renderTwo(t)
+	if strings.Contains(doc, "delete") {
+		t.Fatal("the rendered configuration mentions delete")
+	}
+	for _, line := range strings.Split(doc, "\n") {
+		if !strings.Contains(line, "src_paths") {
+			continue
+		}
+		if !strings.Contains(line, `"/select/.*"`) && !strings.Contains(line, `"/insert/.*"`) {
+			t.Errorf("a route outside /select and /insert: %s", strings.TrimSpace(line))
+		}
+	}
+}

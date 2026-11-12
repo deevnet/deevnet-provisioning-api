@@ -6,6 +6,27 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Changed
+
+- **Deleting a tenant deletes its log lines** (CHG-0065): every line in its three partitions
+  `(index, 0..2)`, after its log users are removed and before the index is freed. The tenant created
+  next with that index used to find the previous tenant's lines there until the retention ran out.
+  The writer does it with a new `purge` operation, through VictoriaLogs' delete API on the store's
+  own loopback listener, and waits for the store to finish. It refuses while any tenant's users
+  still name the index. vmauth still routes only `/select` and `/insert`, so no tenant or operator
+  token reaches the delete API.
+
+### Upgrading
+
+- In this order: the `deevnet.mgmt` `victorialogs` role that starts VictoriaLogs with
+  `-delete.enable` and gives `deevnet-log-user` 0.21.0 a `store_url`, then this API. An older
+  writer refuses `purge` as an unknown operation, and a tenant delete then stops at the
+  `log-store` step with a 502; a second delete resumes it once the writer is updated.
+- `DEEVNET_LOG_PURGE_TIMEOUT` (default `150s`) bounds the purge from the API's side. Keep it longer
+  than the writer's `purge_timeout_seconds` (default 120).
+
 ## 0.20.2 (2026-11-12)
 
 ### Changed
