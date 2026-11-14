@@ -55,7 +55,7 @@ and never carries a secret; a failed step's detail goes to the service's log.
 | `409` | a conflict: a name already registered, nothing free to allocate, or something still in use |
 | `501` | a route that is not implemented, or enrollment at a site that does not configure it |
 | `502` | a backend step failed; the same call resumes it |
-| `503` | the database schema is not migrated yet |
+| `503` | the database schema is not migrated yet, or a bucket route on an API with no bucket store |
 
 ## Requests
 

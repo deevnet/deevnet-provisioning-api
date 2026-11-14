@@ -10,7 +10,7 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 being up.
 
 It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry,
-their devices' fixed addresses, their MQTT broker accounts, their log store tokens, their Grafana organisation, server certificates for their own services and runtime secrets in their own OpenBao namespace (`api/openapi.yaml`, published at
+their devices' fixed addresses, their MQTT broker accounts, their log store tokens, their Grafana organisation, server certificates for their own services, runtime secrets in their own OpenBao namespace and buckets in the bucket store (`api/openapi.yaml`, published at
 https://deevnet.github.io/deevnet-provisioning-api/).
 
 The repository name says what the service is for; the service itself, its binary, image and

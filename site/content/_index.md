@@ -13,7 +13,8 @@ type: docs
 
 The Deevnet API builds tenants on a [Deevnet](https://deevnet.github.io/deevnet-docs/) site: their
 network, DNS zone and state-store credential, their workloads and published names, and the Wi-Fi
-keys, registry entries, fixed addresses and MQTT broker accounts their devices need.
+keys, registry entries, fixed addresses and MQTT broker accounts their devices need, and their
+buckets.
 
 It is **provisioning-only**. Nothing at runtime depends on it being up: devices, the broker, the
 access point and tenant workloads all keep working without it.
@@ -41,6 +42,10 @@ Most callers never speak to it directly. A tenant declares what it wants in Terr
 <a class="section-card" href="docs/service-certificates/">
 <h3>Service Certificates</h3>
 <p>A server certificate for a tenant's own service, for a name in its own zone.</p>
+</a>
+<a class="section-card" href="docs/tenant-buckets/">
+<h3>Tenant Buckets</h3>
+<p>Buckets with hard quotas, and keys that each reach one bucket.</p>
 </a>
 <a class="section-card" href="docs/conventions/">
 <h3>Conventions</h3>
