@@ -20,7 +20,9 @@ an update that raises a quota, that would pass it is refused with `409`, and the
 much is left. Lowering a quota is never refused.
 
 - **The store enforces a quota from its scanner, about a minute behind.** Writes can run past a
-  quota for that long. A single object larger than the quota is refused at once.
+  quota for that long. A single-part upload larger than the quota is refused at once, but a
+  multipart upload, how most clients send a large object, is counted only after it completes, so
+  one object can take a bucket past its quota.
 - **Noncurrent versions count.** In a versioned bucket, overwriting an object keeps the old
   version, and both count against the quota.
 

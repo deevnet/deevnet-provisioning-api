@@ -6,6 +6,13 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Documentation
+
+- Tenant buckets: only a single-part upload larger than a quota is refused at once; a multipart
+  upload is counted after it completes (found in CHG-0069's verification).
+
 ## 0.23.0 (2026-11-14)
 
 ### Changed
