@@ -6,6 +6,39 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## 0.23.0 (2026-11-14)
+
+### Changed
+
+- **Tenant buckets** (ADR-0026 §3, CHG-0069), an optional service. A tenant's bucket is
+  `<tenant>-<name>` in the site's bucket store, with a hard quota, optional versioning, lifecycle
+  expiry of current objects and noncurrent versions, and optional anonymous read of its objects
+  (never listing).
+  - `POST /v1/tenants/{name}/buckets` creates a bucket and its `default` key, with `write` access,
+    and returns the key's `secret_key` once. `GET` lists and reads buckets; `PUT` changes quota,
+    versioning, lifecycle and anonymous read; `DELETE` refuses a bucket holding any object version
+    with `409` unless `force=true`, which empties it first.
+  - `POST /v1/tenants/{name}/buckets/{bucket}/keys` adds a `read` or `write` key, returning its
+    `secret_key` once; `GET` lists and reads keys without it; `DELETE` revokes one, `default`
+    included. Each key is a store user whose policy reaches its one bucket and nothing else.
+  - **Quotas are admitted, never overcommitted:** a create, or a quota increase, that would take the
+    sum of every tenant's quotas past the store's capacity is refused with `409`, naming what is
+    left.
+  - A new `buckets` step of reconcile makes every bucket and key again in a rebuilt store, and
+    deleting a tenant removes its buckets with everything in them, and their keys.
+  - The routes answer `503` on an API with no bucket store configured.
+
+### Upgrading
+
+- Migration `0015_tenant_buckets.sql` runs on start. A key's secret is sealed with Transit, and the
+  Transit reseal covers it.
+- The service is off unless `BUCKET_STORE_ENDPOINT` is set (the store's `host[:port]`, reached over
+  TLS). With it, `BUCKET_STORE_PUBLIC_ENDPOINT` (what tenants are told) and
+  `BUCKET_STORE_CAPACITY_GB` (what all quotas may add up to) are required, and so is
+  `MINIO_ADMIN_CACERT`, which verifies it. The API uses the state store's admin credential pair on
+  the bucket store, and that user needs the user, canned-policy and bucket-quota admin actions there,
+  and the S3 actions to make, configure, empty and delete any bucket: see Configuration.
+
 ## 0.22.5 (2026-11-14)
 
 ### Fixed

@@ -6,7 +6,7 @@ info:
   description: |
     The Deevnet API builds tenants on a Deevnet site: their network, DNS zone and state-store
     credential, their workloads and published names, and the Wi-Fi keys, registry entries,
-    fixed addresses and MQTT broker accounts their devices need.
+    fixed addresses and MQTT broker accounts their devices need, and their buckets.
 
     It is **provisioning-only**. Nothing at runtime depends on it being up.
 
@@ -27,7 +27,8 @@ info:
       or unreachable: a tenant's secrets cannot be opened, so its work is refused before anything
       changes, and nothing stored is lost or re-minted. A tenant token is not told `401` then.
       Tenant routes answer `501` on an API that has no site configured, and the secret routes
-      at a site that does not offer tenant secrets.
+      at a site that does not offer tenant secrets. The bucket routes answer `503` on an API
+      with no bucket store configured.
 servers:
   - url: "{endpoint}"
     description: A site's API. The provider reads it from DEEVNET_API_ENDPOINT.
@@ -68,6 +69,11 @@ tags:
       A tenant's runtime secrets, in its own namespace of the site's OpenBao, and each
       workload's reader of them. Optional: a site that does not offer the service answers
       `501`. The API writes a value and never returns one.
+  - name: Buckets
+    description: |
+      A tenant's buckets in the site's bucket store, and keys to them. Each key reaches one
+      bucket. Optional: an API with no bucket store answers `503`. The substrate stores a
+      bucket's contents and does not back them up.
   - name: Fabric
     description: What the exit node's agent reads.
 
@@ -1335,6 +1341,273 @@ paths:
         "502": { $ref: "#/components/responses/StepFailed" }
         "503": { $ref: "#/components/responses/NotMigrated" }
 
+  /v1/tenants/{name}/buckets:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    post:
+      tags: [Buckets]
+      operationId: createBucket
+      summary: Create a bucket
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Makes `<tenant>-<name>` in the bucket store with a hard quota of `quota_gb`, and its
+        `default` key with `write` access. The response carries that key with its `secret_key`;
+        no read ever does.
+
+        **Admission.** The sum of `quota_gb` over every tenant's buckets may not pass the store's
+        configured capacity. A bucket that would is refused with `409`, and the message says how
+        much is left. The store enforces a quota from its scanner, about a minute behind; a single
+        object larger than the quota is refused at once.
+
+        `versioning` true enables versioning; false after true suspends it, because S3 cannot
+        un-version a bucket. `lifecycle` expires current objects after `expire_days` and
+        noncurrent versions after `noncurrent_expire_days`; 0 is none. `public_read` lets anyone
+        who reaches the store get an object without a key, and nothing else: no listing.
+
+        A name already taken is `409`. A create that failed at the store is resumed by calling it
+        again, with the same key. The tenant must be `ready`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BucketRequest" }
+            example:
+              name: media
+              quota_gb: 5
+              versioning: true
+              lifecycle: { expire_days: 0, noncurrent_expire_days: 30 }
+              public_read: false
+      responses:
+        "201":
+          description: The bucket, with its `default` key and that key's `secret_key`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bucket" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "409":
+          description: The name is taken, or the store has no room for the quota.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "the bucket store has 3 GB of 100 GB left to allocate; this needs 5 GB" }
+        "502":
+          description: The store step failed. The bucket is in the body with its key and `secret_key`; the same call resumes it with the same key.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  bucket: { $ref: "#/components/schemas/Bucket" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+    get:
+      tags: [Buckets]
+      operationId: listBuckets
+      summary: List a tenant's buckets
+      description: "**Callers:** operator, or the tenant itself. Never carries a key."
+      responses:
+        "200":
+          description: The buckets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [buckets]
+                properties:
+                  buckets:
+                    type: array
+                    items: { $ref: "#/components/schemas/Bucket" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+  /v1/tenants/{name}/buckets/{bucket}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - $ref: "#/components/parameters/bucket"
+    get:
+      tags: [Buckets]
+      operationId: getBucket
+      summary: Read a bucket
+      description: "**Callers:** operator, or the tenant itself. Never carries a key."
+      responses:
+        "200":
+          description: The bucket.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bucket" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+    put:
+      tags: [Buckets]
+      operationId: updateBucket
+      summary: Change a bucket
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Sets the bucket's quota, versioning, lifecycle and anonymous read to what is sent. A
+        larger quota is admitted as a create is, and refused with `409` when the store has no
+        room; a smaller one never is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BucketUpdateRequest" }
+      responses:
+        "200":
+          description: The bucket.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bucket" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The store has no room for the larger quota.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+    delete:
+      tags: [Buckets]
+      operationId: deleteBucket
+      summary: Delete a bucket
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Without `force`, a bucket that holds any object version or delete marker is refused with
+        `409` and nothing changes. With `force=true`, every version and delete marker goes, then
+        the bucket, its keys and their policies. The substrate keeps no copy.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          description: "`true` deletes everything in the bucket first."
+          schema: { type: boolean, default: false }
+      responses:
+        "204": { description: Deleted. }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The bucket is not empty and `force` was not set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+  /v1/tenants/{name}/buckets/{bucket}/keys:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - $ref: "#/components/parameters/bucket"
+    post:
+      tags: [Buckets]
+      operationId: createBucketKey
+      summary: Create a bucket key
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        A key is a store user whose policy reaches this bucket and nothing else. `write` lists,
+        gets, puts and deletes objects and their versions; `read` lists and gets them. The API
+        chooses the `access_key` and `secret_key`; the `secret_key` is in this response and no
+        other.
+
+        A name already taken on the bucket is `409`. A create that failed at the store is resumed
+        by calling it again, with the same key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BucketKeyRequest" }
+            example: { name: reader, access: read }
+      responses:
+        "201":
+          description: The key, with its `secret_key`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BucketKey" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The name is taken on this bucket.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The store step failed. The key is in the body with its `secret_key`; the same call resumes it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  key: { $ref: "#/components/schemas/BucketKey" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+    get:
+      tags: [Buckets]
+      operationId: listBucketKeys
+      summary: List a bucket's keys
+      description: "**Callers:** operator, or the tenant itself. Never carries a `secret_key`."
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/BucketKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+  /v1/tenants/{name}/buckets/{bucket}/keys/{key}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - $ref: "#/components/parameters/bucket"
+      - name: key
+        in: path
+        required: true
+        description: The key's name.
+        schema: { type: string }
+    get:
+      tags: [Buckets]
+      operationId: getBucketKey
+      summary: Read a bucket key
+      description: "**Callers:** operator, or the tenant itself. Never carries the `secret_key`."
+      responses:
+        "200":
+          description: The key, without its `secret_key`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BucketKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+    delete:
+      tags: [Buckets]
+      operationId: deleteBucketKey
+      summary: Revoke a bucket key
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Deletes the store user and its policy. The `default` key is deleted like any other.
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/StepFailed" }
+        "503": { $ref: "#/components/responses/BucketsNotOffered" }
+
   /v1/fabric/egress:
     get:
       tags: [Fabric]
@@ -1389,6 +1662,13 @@ components:
       description: The tenant's name.
       schema: { type: string, pattern: "^[a-z][a-z0-9]{0,7}$" }
       example: tdemo
+    bucket:
+      name: bucket
+      in: path
+      required: true
+      description: The bucket's short name, as the tenant declared it, not `<tenant>-<name>`.
+      schema: { type: string }
+      example: media
     device:
       name: device
       in: path
@@ -1440,6 +1720,12 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: this site does not offer tenant secrets }
+    BucketsNotOffered:
+      description: The API has no bucket store configured, or the schema is not migrated, or OpenBao is sealed or unreachable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: this site has no bucket store }
     NotMigrated:
       description: The database schema is not migrated yet, or OpenBao is sealed or unreachable. Nothing was changed.
       content:
@@ -1925,6 +2211,60 @@ components:
         secret_id: { type: string, description: "The AppRole's secret ID, bound to the workload's address. Only on a PUT, never a read." }
         namespace: { type: string, description: "Where the workload logs in: `tenants/<name>`. AppRole mount `approle`, KV mount `secrets`." }
         addr: { type: string, description: The OpenBao address the workload logs in at. }
+    BucketLifecycle:
+      type: object
+      additionalProperties: false
+      required: [expire_days, noncurrent_expire_days]
+      properties:
+        expire_days: { type: integer, minimum: 0, description: "Expire current objects after this many days. 0 is none." }
+        noncurrent_expire_days: { type: integer, minimum: 0, description: "Expire noncurrent versions after this many days. 0 is none." }
+    BucketRequest:
+      type: object
+      additionalProperties: false
+      required: [name, quota_gb]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9-]{1,30}[a-z0-9]$", description: "The store's bucket is `<tenant>-<name>`, at most 63 characters." }
+        quota_gb: { type: integer, minimum: 1, description: "Hard quota, as the store enforces it. Admitted against the store's capacity." }
+        versioning: { type: boolean, default: false, description: "true enables versioning; false after true suspends it." }
+        lifecycle: { $ref: "#/components/schemas/BucketLifecycle" }
+        public_read: { type: boolean, default: false, description: "Anonymous `GetObject` on the bucket's objects, and nothing else." }
+    BucketUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [quota_gb]
+      properties:
+        quota_gb: { type: integer, minimum: 1 }
+        versioning: { type: boolean, default: false }
+        lifecycle: { $ref: "#/components/schemas/BucketLifecycle" }
+        public_read: { type: boolean, default: false }
+    Bucket:
+      type: object
+      required: [name, bucket, endpoint, quota_gb, versioning, lifecycle, public_read, status]
+      properties:
+        name: { type: string }
+        bucket: { type: string, description: "The store's name for it: `<tenant>-<name>`." }
+        endpoint: { type: string, description: "The store, path-style, for example `https://s3.site.example`." }
+        quota_gb: { type: integer }
+        versioning: { type: boolean }
+        lifecycle: { $ref: "#/components/schemas/BucketLifecycle" }
+        public_read: { type: boolean }
+        status: { type: string, enum: [provisioning, ready, deleting] }
+        key: { $ref: "#/components/schemas/BucketKey", description: "The `default` key, on the create response only." }
+    BucketKeyRequest:
+      type: object
+      additionalProperties: false
+      required: [name, access]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9-]{0,19}$", description: Unique within the bucket. }
+        access: { type: string, enum: [read, write] }
+    BucketKey:
+      type: object
+      required: [name, access, access_key]
+      properties:
+        name: { type: string }
+        access: { type: string, enum: [read, write] }
+        access_key: { type: string, pattern: "^[A-Z0-9]{20}$" }
+        secret_key: { type: string, description: "40 characters. On a create response only, never a read." }
     EgressVRF:
       type: object
       required: [tenant, vrf]

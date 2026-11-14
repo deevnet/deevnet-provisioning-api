@@ -30,6 +30,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	brokerAccountRoutes(mux, h)
 	certificateRoutes(mux, h)
 	secretRoutes(mux, h)
+	bucketRoutes(mux, h)
 }
 
 // ownTenant admits the operator, and a registered tenant for its own name. A
@@ -412,11 +413,20 @@ func (h *tenantHandlers) egress(w http.ResponseWriter, r *http.Request) {
 func (h *tenantHandlers) fail(w http.ResponseWriter, err error) {
 	var inv *tenant.InvalidError
 	var step *tenant.StepError
+	var capacity *tenant.CapacityError
 	switch {
 	// First: a sealed store can surface inside a failed step, and is still
 	// OpenBao's state rather than the step's.
 	case errors.Is(err, tenant.ErrSecretsUnavailable):
 		writeUnavailable(w)
+	case errors.Is(err, tenant.ErrBucketsNotOffered):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": tenant.ErrBucketsNotOffered.Error()})
+	case errors.Is(err, tenant.ErrBucketNotFound), errors.Is(err, tenant.ErrBucketKeyNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	case errors.Is(err, tenant.ErrBucketExists), errors.Is(err, tenant.ErrBucketKeyExists), errors.Is(err, tenant.ErrBucketNotEmpty):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.As(err, &capacity):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": capacity.Error()})
 	case errors.Is(err, tenant.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
 	case errors.Is(err, tenant.ErrExists):

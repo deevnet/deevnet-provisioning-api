@@ -146,6 +146,20 @@ already go to.
 Dashboards need the log store: `DEEVNET_LOG_ENDPOINT` and `DEEVNET_LOG_WRITER_ADDR` are required
 with them, because a tenant's data sources carry its log read token.
 
+### Buckets
+
+| Variable | Meaning |
+|---|---|
+| `BUCKET_STORE_ENDPOINT` | the bucket store's `host[:port]`, which the admin client dials over TLS, for example `s3.site.example.net`; turns buckets on. Unset, the bucket routes answer `503` |
+| `BUCKET_STORE_PUBLIC_ENDPOINT` | what tenants are told the store is at, for example `https://s3.site.example.net`. Required with the endpoint |
+| `BUCKET_STORE_CAPACITY_GB` | what every tenant's bucket quotas may add up to, in GB. Required with the endpoint |
+
+They need no credential of their own: the API drives the bucket store with the state store's admin
+pair, `minio_admin_access_key` and `minio_admin_secret_key`, and verifies it with
+`MINIO_ADMIN_CACERT`, which is then required. On the bucket store that user needs the admin actions
+for users, canned policies and bucket quotas, and the S3 actions to make, configure, empty and
+delete any bucket.
+
 ### Service certificates
 
 | Variable | Default | Meaning |
