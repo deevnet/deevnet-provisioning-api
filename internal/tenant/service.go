@@ -105,6 +105,16 @@ type Service struct {
 	// server certificate (ADR-0037). Nil at a site with no such CA, where the
 	// certificate routes refuse with a reason.
 	Signer CertificateSigner
+	// TenantSecrets is OpenBao, holding each tenant's runtime secrets in a
+	// namespace of its own (ADR-0021, CHG-0067). Nil at a site that does not
+	// offer the service, where the secret routes refuse with a reason.
+	TenantSecrets SecretsBackend
+	// SecretsNamespace is the parent of every tenant's namespace, "tenants":
+	// a tenant's is <SecretsNamespace>/<name>.
+	SecretsNamespace string
+	// SecretsAddr is the OpenBao address a tenant's workloads log in at,
+	// handed to the tenant with each reader.
+	SecretsAddr string
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.
@@ -518,6 +528,15 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 			run  func() error
 		}{{StepDashboard, func() error { return s.removeDashboards(ctx, rec) }}}, steps...)
 	}
+	// The tenant's namespace first (ADR-0021 §1): every credential its
+	// workloads read with dies with it, before anything else of the tenant's
+	// goes. Its registry rows go with the tenant's row.
+	if s.TenantSecrets != nil {
+		steps = append([]struct {
+			name string
+			run  func() error
+		}{{StepSecrets, func() error { return s.removeSecrets(ctx, rec) }}}, steps...)
+	}
 
 	for _, st := range steps {
 		if err := st.run(); err != nil {
@@ -657,6 +676,11 @@ func (s *Service) DeleteWorkload(ctx context.Context, tenantName, name string) e
 	}
 	w, err := s.Store.GetWorkload(ctx, tenantName, name)
 	if err != nil {
+		return err
+	}
+	// Its secret readers first (ADR-0021 §5): a credential bound to an
+	// address the next workload may be given must not outlive this one.
+	if err := s.removeWorkloadReaders(ctx, tenantName, name); err != nil {
 		return err
 	}
 	if s.Compute != nil {
@@ -845,6 +869,15 @@ func (s *Service) ensure(ctx context.Context, rec Record) (Record, error) {
 			name string
 			run  func() error
 		}{StepDashboard, func() error { return s.ensureDashboards(ctx, s.reload(ctx, rec)) }})
+	}
+	// The tenant's secrets namespace (ADR-0021, CHG-0067), at a site that
+	// offers it. On a reconcile after OpenBao lost it, this makes it again,
+	// empty; the tenant's next apply fills it.
+	if s.TenantSecrets != nil {
+		steps = append(steps, struct {
+			name string
+			run  func() error
+		}{StepSecrets, func() error { return s.ensureSecrets(ctx, rec) }})
 	}
 
 	for _, st := range steps {

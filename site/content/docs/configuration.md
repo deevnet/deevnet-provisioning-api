@@ -156,3 +156,15 @@ with them, because a tenant's data sources carry its log read token.
 
 They need no credential of their own. The service's AppRole policy must allow `update` on
 `<mount>/sign/<role>` and nothing else on the mount.
+
+### Tenant secrets
+
+| Variable | Meaning |
+|---|---|
+| `DEEVNET_TENANT_SECRETS_NAMESPACE` | the parent namespace in OpenBao every tenant's own sits under, for example `tenants`; turns tenant secrets on. It needs `OPENBAO_ADDR` |
+| `DEEVNET_TENANT_SECRETS_ADDR` | the OpenBao address tenants' workloads log in at, handed to the tenant with each reader, for example `https://bao.site.example.net:8200`. Required with the namespace |
+
+They need no credential of their own: the service's AppRole does the work, and its policy must
+grant it administration below the parent namespace and nothing above it. On the KV mount it needs
+`create` and `update` on `data/*` and `read` and `delete` on `metadata/*`, and never `read` on
+`data/*`: the API writes a tenant's secret and cannot read it back.

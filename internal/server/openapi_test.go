@@ -83,7 +83,9 @@ func registeredRoutes(t *testing.T) []string {
 				if pattern == "/v1/" {
 					return true
 				}
-				routes = append(routes, pattern)
+				// A trailing {x...} matches the rest of the path. OpenAPI has
+				// no such template, so the spec names it {x} and says so.
+				routes = append(routes, strings.ReplaceAll(pattern, "...}", "}"))
 				return true
 			})
 		}
@@ -153,6 +155,10 @@ var wireSchemas = map[string]any{
 	"BrokerAccount":        brokerAccountView{},
 	"CertificateRequest":   certificateBody{},
 	"Certificate":          certificateView{},
+	"SecretRequest":        secretBody{},
+	"Secret":               secretView{},
+	"SecretReaderRequest":  secretReaderBody{},
+	"SecretReader":         secretReaderView{},
 	"EgressVRF":            tenant.EgressVRF{},
 }
 

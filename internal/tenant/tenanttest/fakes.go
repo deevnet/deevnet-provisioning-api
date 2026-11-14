@@ -21,20 +21,22 @@ type Store struct {
 	Unreadable bool
 	// Sealed makes every read of a sealed secret fail as a sealed OpenBao
 	// does in the real store: an error, never an empty value.
-	Sealed        bool
-	mu            sync.Mutex
-	records       map[string]tenant.Record
-	workloads     map[string]tenant.Workload
-	wifiKeys      map[string]tenant.WiFiKey
-	admissionKeys map[string]tenant.AdmissionKey
-	devices       map[string]tenant.Device
-	addresses     map[string]tenant.DeviceAddress
-	brokerAccts   map[string]tenant.BrokerAccount
-	certificates  map[string]tenant.Certificate
-	extraRecords  map[string]tenant.ExtraRecord
-	revoked       map[string]string
-	deletedNames  map[string]bool
-	AuditLog      []tenant.AuditEntry
+	Sealed         bool
+	mu             sync.Mutex
+	records        map[string]tenant.Record
+	workloads      map[string]tenant.Workload
+	wifiKeys       map[string]tenant.WiFiKey
+	admissionKeys  map[string]tenant.AdmissionKey
+	devices        map[string]tenant.Device
+	addresses      map[string]tenant.DeviceAddress
+	brokerAccts    map[string]tenant.BrokerAccount
+	certificates   map[string]tenant.Certificate
+	runtimeSecrets map[string]tenant.RuntimeSecret
+	secretReaders  map[string]tenant.SecretReader
+	extraRecords   map[string]tenant.ExtraRecord
+	revoked        map[string]string
+	deletedNames   map[string]bool
+	AuditLog       []tenant.AuditEntry
 }
 
 func NewStore() *Store { return &Store{records: map[string]tenant.Record{}} }
@@ -719,6 +721,9 @@ type Backends struct {
 	// (ADR-0037). Its own fields make it fail or misbehave.
 	Signer *Signer
 
+	// Bao is OpenBao holding tenants' namespaces (ADR-0021).
+	Bao *Bao
+
 	FailDNS, FailResolver, FailState, FailFabric error
 	FailNetwork, FailCompute, FailWireless       error
 }
@@ -739,6 +744,7 @@ func NewBackends() *Backends {
 		DashTenants:    map[string]tenant.DashTenant{},
 		DashOrgs:       map[string]int{},
 		Signer:         NewSigner(),
+		Bao:            NewBao(),
 	}
 }
 
@@ -1155,6 +1161,10 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		Dashboards:   b.Dashboards(),
 		Signer:       b.Signer,
 		Tokens:       tokens,
-		Enroller:     &Enroller{},
+
+		TenantSecrets:    b.Bao,
+		SecretsNamespace: "tenants",
+		SecretsAddr:      "https://bao.site.example:8200",
+		Enroller:         &Enroller{},
 	}, st, b
 }

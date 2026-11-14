@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Postgres {
 	}
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, revoked_tenant_tokens, deleted_tenant_names, tenants, schema_migrations CASCADE`,
+		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, tenant_runtime_secrets, tenant_secret_readers, revoked_tenant_tokens, deleted_tenant_names, tenants, schema_migrations CASCADE`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatal(err)
@@ -296,8 +296,8 @@ func TestServiceOverPostgres(t *testing.T) {
 	if first.Record.Index != 1 || second.Record.Index != 3 || second.Record.Status != tenant.StatusReady {
 		t.Fatalf("indexes %d and %d (%s), want 1 and 3 ready", first.Record.Index, second.Record.Index, second.Record.Status)
 	}
-	// dns, resolver, state, network, device-address, log-store and dashboards.
-	if len(second.Record.Steps) != 7 {
+	// dns, resolver, state, network, device-address, log-store, dashboards and secrets.
+	if len(second.Record.Steps) != 8 {
 		t.Fatalf("steps = %+v", second.Record.Steps)
 	}
 }

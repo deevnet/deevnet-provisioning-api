@@ -29,6 +29,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	addressRoutes(mux, h)
 	brokerAccountRoutes(mux, h)
 	certificateRoutes(mux, h)
+	secretRoutes(mux, h)
 }
 
 // ownTenant admits the operator, and a registered tenant for its own name. A
@@ -422,6 +423,8 @@ func (h *tenantHandlers) fail(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "tenant already exists"})
 	case errors.Is(err, tenant.ErrExhausted):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "no free tenant index"})
+	case errors.Is(err, tenant.ErrSecretsNotOffered):
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": tenant.ErrSecretsNotOffered.Error()})
 	case errors.Is(err, tenant.ErrNoEnrollment):
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "enrollment is not configured on this API"})
 	case errors.Is(err, tenant.ErrHasWorkloads):
