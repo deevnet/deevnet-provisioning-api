@@ -331,9 +331,13 @@ func (s *Service) restoreExisting(ctx context.Context, rec Record, req CreateReq
 	s.audit(ctx, string(outcome), rec.Name, map[string]any{"index": rec.Index, "requested_index": req.Index})
 
 	rec, err := s.ensure(ctx, rec)
-	// Minted by the dashboards step rather than here, so it is read back from
-	// the record the steps left, like nothing else in this response.
+	// Read back from the record the steps left: the dashboard password is
+	// minted by its step, and the log tokens are the ones the store was given.
+	// A tenant created before either existed is handed them here, as by a
+	// reconcile.
 	issued.DashboardPassword = rec.Secrets.DashboardPassword
+	issued.LogIngestToken = rec.Secrets.LogIngest
+	issued.LogReadToken = rec.Secrets.LogRead
 	return Result{Record: rec, Outcome: outcome, Issued: issued}, err
 }
 

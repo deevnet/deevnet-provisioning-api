@@ -6,6 +6,13 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## 0.22.3 (2026-11-14)
+
+### Fixed
+
+- **A restore over a registered tenant returns its log tokens**, as a reconcile does. A tenant
+  created before the log store had no other way to receive them through its own Terraform.
+
 ## 0.22.2 (2026-11-14)
 
 ### Fixed

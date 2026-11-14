@@ -510,6 +510,9 @@ func TestARegisteredTenantRestoresWithItsLiveTokenAfterItsNameWasDeleted(t *test
 	if got.Outcome != tenant.OutcomeReconciled {
 		t.Errorf("outcome = %s, want reconciled", got.Outcome)
 	}
+	if got.Issued.LogIngestToken == "" || got.Issued.LogReadToken == "" {
+		t.Error("a restore over the registry did not return the log tokens")
+	}
 
 	stale := live
 	stale.APIToken = old
