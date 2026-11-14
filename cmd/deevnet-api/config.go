@@ -186,6 +186,15 @@ var openbaoEnv = []string{
 //	                                 given: iot=10.20.30.0/24:10.20.30.25-10.20.30.200
 //	DEEVNET_IOT_ADDRESSES_PER_TENANT "16": one tenant's share of such a range
 //
+//	DEEVNET_TENANT_SECRETS_NAMESPACE unset: the site does not offer tenant
+//	                                 secrets (ADR-0021). Set, it is the
+//	                                 parent namespace in OpenBao every
+//	                                 tenant's own sits under: tenants. It
+//	                                 needs OPENBAO_ADDR and:
+//	DEEVNET_TENANT_SECRETS_ADDR      the OpenBao address tenants' workloads
+//	                                 log in at, handed to the tenant with each
+//	                                 reader: https://bao.mobile.deevnet.net:8200
+//
 //	DEEVNET_GRAFANA_ADMIN_USER     "admin"
 //	DEEVNET_BROKER_CONNECT_TIMEOUT "10s": reaching the messaging VM
 //	DEEVNET_BROKER_SESSION_TIMEOUT "30s": the whole exchange once connected.
@@ -234,6 +243,19 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	}
 	if missing := empty(getenv, siteEnv); len(missing) > 0 {
 		return wiring{}, fmt.Errorf("DEEVNET_SITE is set, so tenants are served, but these are empty: %s", strings.Join(missing, ", "))
+	}
+
+	// Tenant secrets (ADR-0021) are in OpenBao and nowhere else, and a reader
+	// is no use to a workload without the address to log in at. Both are
+	// startup failures rather than a reader route that fails later.
+	secretsNS := strings.Trim(getenv("DEEVNET_TENANT_SECRETS_NAMESPACE"), "/")
+	if secretsNS != "" {
+		if getenv("OPENBAO_ADDR") == "" {
+			return wiring{}, errors.New("DEEVNET_TENANT_SECRETS_NAMESPACE is set, but OPENBAO_ADDR is not: tenant secrets are in OpenBao")
+		}
+		if getenv("DEEVNET_TENANT_SECRETS_ADDR") == "" {
+			return wiring{}, errors.New("DEEVNET_TENANT_SECRETS_NAMESPACE is set, but DEEVNET_TENANT_SECRETS_ADDR is empty: workloads need the address to log in at")
+		}
 	}
 
 	var (
@@ -436,6 +458,13 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		return wiring{}, errors.New("OPENBAO_TENANT_SERVICE_MOUNT is set, but OPENBAO_ADDR is not: the Tenant Service CA is in OpenBao")
 	case mount != "":
 		svc.Signer = bao
+	}
+	// Left nil without a namespace, so the secret routes answer 501: a site
+	// that does not offer tenant secrets is a legitimate site (ADR-0021 §7).
+	if secretsNS != "" {
+		svc.TenantSecrets = bao
+		svc.SecretsNamespace = secretsNS
+		svc.SecretsAddr = getenv("DEEVNET_TENANT_SECRETS_ADDR")
 	}
 	// Left nil without a range, so the address routes refuse with a reason.
 	if len(site.AddressRanges) > 0 {

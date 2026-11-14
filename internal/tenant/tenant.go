@@ -342,6 +342,17 @@ type Store interface {
 	ListCertificates(ctx context.Context, tenantName string) ([]Certificate, error)
 	DeleteCertificate(ctx context.Context, tenantName, name string) error
 
+	// Tenant runtime secrets (ADR-0021): the path and the tenant's version
+	// of each secret, never its value, and each workload's reader. Nothing is
+	// sealed, because nothing here is secret.
+	PutRuntimeSecret(ctx context.Context, sec RuntimeSecret) (RuntimeSecret, error)
+	GetRuntimeSecret(ctx context.Context, tenantName, path string) (RuntimeSecret, error)
+	DeleteRuntimeSecret(ctx context.Context, tenantName, path string) error
+	PutSecretReader(ctx context.Context, r SecretReader) (SecretReader, error)
+	GetSecretReader(ctx context.Context, tenantName, name string) (SecretReader, error)
+	ListSecretReaders(ctx context.Context, tenantName string) ([]SecretReader, error)
+	DeleteSecretReader(ctx context.Context, tenantName, name string) error
+
 	// Extra records (ADR-0015 §13).
 	PutRecord(ctx context.Context, r ExtraRecord) error
 	ListRecords(ctx context.Context, tenantName string) ([]ExtraRecord, error)

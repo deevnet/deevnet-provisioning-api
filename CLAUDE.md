@@ -10,7 +10,7 @@ service that tenant Terraform reaches through the `deevnet/deevnet` provider. It
 being up.
 
 It serves tenants (create, restore, reconcile, delete), their Wi-Fi keys, their device registry,
-their devices' fixed addresses, their MQTT broker accounts, their log store tokens, their Grafana organisation and server certificates for their own services (`api/openapi.yaml`, published at
+their devices' fixed addresses, their MQTT broker accounts, their log store tokens, their Grafana organisation, server certificates for their own services and runtime secrets in their own OpenBao namespace (`api/openapi.yaml`, published at
 https://deevnet.github.io/deevnet-provisioning-api/).
 
 The repository name says what the service is for; the service itself, its binary, image and
@@ -64,6 +64,12 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   against what was asked before it is stored or returned, and a certificate that says more is a
   failed step, not a result. Don't add a field that lets a caller name a zone, a lifetime or a
   usage. The private key never comes to the API, so nothing about a certificate is a secret.
+- **The API writes a tenant's runtime secret and never reads one** (ADR-0021). The value goes to
+  the tenant's namespace, `<parent>/<tenant>`, and nowhere else: not the database, the audit log or
+  a response. Its OpenBao policy has no read on `data/` and cannot list mounts, so
+  an enable is idempotent by reading "path is already in use" as success, and presence is read
+  from `metadata/`. A reader revoke deletes the AppRole *and* its policy: a held token outlives
+  its AppRole, not its policy.
 - **Allocation reads the fabric.** An index is free only if no registry row holds it and no SDN
   zone or VNet carries its numbers. Don't shortcut to the database alone.
 - **A workload's identity is derived, never allocated by hand** (ADR-0015 §12): ordinal from the

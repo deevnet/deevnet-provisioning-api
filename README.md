@@ -17,7 +17,8 @@ container, are `deevnet-api`.
 - it returns every value and secret the tenant needs
 
 It also serves a tenant's device registry, fixed device addresses, Wi-Fi keys, MQTT broker
-accounts, log store tokens and dashboard login, each where the site runs the service behind it.
+accounts, log store tokens, dashboard login, service certificates and runtime secrets, each where
+the site runs the service behind it.
 
 ## Documentation
 
@@ -30,6 +31,7 @@ accounts, log store tokens and dashboard login, each where the site runs the ser
 | [Tenant Lifecycle](https://deevnet.github.io/deevnet-provisioning-api/docs/tenant-lifecycle/) | admit, create, restore, resume, reconcile, delete |
 | [Device Services](https://deevnet.github.io/deevnet-provisioning-api/docs/device-services/) | registry, fixed addresses, Wi-Fi keys, broker accounts |
 | [Service Certificates](https://deevnet.github.io/deevnet-provisioning-api/docs/service-certificates/) | a server certificate for a tenant's own service, for a name in its own zone |
+| [Tenant Secrets](https://deevnet.github.io/deevnet-provisioning-api/docs/tenant-secrets/) | runtime secrets in the tenant's own OpenBao namespace, and each workload's reader |
 | [Conventions](https://deevnet.github.io/deevnet-provisioning-api/docs/conventions/) | ensures, partial objects, where secrets appear, errors |
 | [Configuration](https://deevnet.github.io/deevnet-provisioning-api/docs/configuration/) | every environment variable the service reads |
 | [Release Notes](https://deevnet.github.io/deevnet-provisioning-api/docs/release-notes/) | what changed in each version; the source is `CHANGELOG.md` |

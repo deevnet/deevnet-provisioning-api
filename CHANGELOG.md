@@ -6,6 +6,32 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Changed
+
+- **Tenant secrets** (ADR-0021, CHG-0067), an optional service. Each tenant gets a namespace,
+  `<parent>/<name>`, in the site's OpenBao, with a KV v2 mount `secrets` and an AppRole mount
+  `approle`, made by a new `secrets` step of create and reconcile and deleted first when the tenant
+  is deleted.
+  - `PUT /v1/tenants/{name}/secrets/{path}` writes a value; `GET` reports its path and the tenant's
+    version, never the value, and is `404` when OpenBao no longer holds it; `DELETE` deletes every
+    version.
+  - `PUT /v1/tenants/{name}/secret-readers/{reader}` gives one workload read on named paths, as an
+    AppRole bound to the workload's address, and returns its role ID and a new secret ID; `GET`
+    returns it without the secret ID; `DELETE` deletes the AppRole and its policy.
+  - Deleting a workload revokes its readers.
+  - The routes answer `501` at a site that does not offer the service, and `503` while OpenBao is
+    sealed or unreachable.
+
+### Upgrading
+
+- Migration `0013_tenant_secrets.sql` runs on start: paths, versions and readers, never a value.
+- The service is off unless `DEEVNET_TENANT_SECRETS_NAMESPACE` is set (the parent namespace, for
+  example `tenants`). With it, `OPENBAO_ADDR` and `DEEVNET_TENANT_SECRETS_ADDR` (the address
+  workloads log in at) are required. The parent namespace must exist, and the API's OpenBao policy
+  must grant namespace administration below it: see Configuration.
+
 ## 0.21.0 (2026-11-12)
 
 ### Changed

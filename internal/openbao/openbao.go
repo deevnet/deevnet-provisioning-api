@@ -1,8 +1,9 @@
 // Package openbao is the API's client for OpenBao (ADR-0016): its backend
-// credentials from KV, envelope encryption of tenant secrets with Transit, and
-// single-use enrollment tokens with response wrapping.
+// credentials from KV, envelope encryption of tenant secrets with Transit,
+// single-use enrollment tokens with response wrapping, and tenants' own
+// namespaces (ADR-0021, in namespaces.go).
 //
-// Plain net/http, not the OpenBao Go module: the API uses five endpoints, and
+// Plain net/http, not the OpenBao Go module: the API uses a handful of endpoints, and
 // the repository keeps its dependencies to what it cannot reasonably write.
 // The endpoints and shapes were checked against openbao 2.6.2.
 package openbao
@@ -124,12 +125,17 @@ func (c *Client) forget() {
 
 // do calls OpenBao as the API, logging in again once if the token is refused.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doWith(ctx, nil, method, path, in, out)
+}
+
+// doWith is do with extra headers: a tenant's namespace (ADR-0021 §1).
+func (c *Client) doWith(ctx context.Context, headers map[string]string, method, path string, in, out any) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		tok, err := c.login(ctx)
 		if err != nil {
 			return err
 		}
-		err = c.call(ctx, method, path, tok, nil, in, out)
+		err = c.call(ctx, method, path, tok, headers, in, out)
 		if errors.Is(err, errForbidden) && attempt == 0 {
 			c.forget()
 			continue

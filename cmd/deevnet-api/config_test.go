@@ -484,3 +484,33 @@ func TestTenantServiceCANeedsOpenBao(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A site that does not offer tenant secrets still starts, with the service
+// off (ADR-0021 §7).
+func TestNoTenantSecretsStillStarts(t *testing.T) {
+	w, err := tenantService(context.Background(), env(fullEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.TenantSecrets != nil {
+		t.Error("no DEEVNET_TENANT_SECRETS_NAMESPACE should mean no tenant secrets")
+	}
+}
+
+// Tenant secrets are in OpenBao, and a reader needs the address workloads
+// log in at: either missing is a startup failure that names it.
+func TestTenantSecretsMisconfigured(t *testing.T) {
+	e := fullEnv()
+	e["DEEVNET_TENANT_SECRETS_NAMESPACE"] = "tenants"
+	e["DEEVNET_TENANT_SECRETS_ADDR"] = "https://bao.site.example:8200"
+	_, err := tenantService(context.Background(), env(e))
+	if err == nil || !strings.Contains(err.Error(), "OPENBAO_ADDR") {
+		t.Fatalf("without OpenBao: err = %v", err)
+	}
+	e["OPENBAO_ADDR"] = "https://127.0.0.1:1"
+	delete(e, "DEEVNET_TENANT_SECRETS_ADDR")
+	_, err = tenantService(context.Background(), env(e))
+	if err == nil || !strings.Contains(err.Error(), "DEEVNET_TENANT_SECRETS_ADDR") {
+		t.Fatalf("without an address: err = %v", err)
+	}
+}
