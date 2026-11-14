@@ -114,11 +114,16 @@ operator may call it. The API mints a secret, records it, sets it on the store a
 the store's endpoint, bucket and prefix. The old secret stops working. It is the way back in for a
 tenant that has lost the keys to its own state, which are kept inside that state.
 
-The stored secret is never returned, by this or any other route. A reissue always mints a new one.
+A reissue always mints a new secret; it never hands back the one it replaced.
 
-**The tenant's Terraform state still holds the old secret afterwards.** A restore sends back what
-state holds, and the supplied secrets win, so a restore from that state would put the old secret
-back and lock the tenant out again. A tenant given a new secret must not restore from its old state.
+**A restore keeps a reissued secret, and hands it back.** The tenant's Terraform state still holds
+the old secret after a reissue, and a restore normally sends back what state holds, with the
+supplied secrets winning. For a state secret reissued since the tenant last supplied one, the API
+keeps the reissued secret instead and returns it in the restore's response, so the tenant's state
+takes it up and agrees with its `.backend.env` again. The restore that returns it carries the
+tenant's own API token, which already controls the tenant. Once a restore supplies the reissued
+secret, supplied secrets win again. A restore after a lost registry is not affected: the tenant's
+copy is then the only one.
 
 | Status | Meaning |
 |---|---|

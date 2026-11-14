@@ -214,13 +214,13 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 	return nil
 }
 
-const tenantColumns = `name, idx, status, tsig_secret, state_secret, api_token_hash, log_ingest_token, log_read_token, dashboard_password, dashboard_org, created_at, updated_at`
+const tenantColumns = `name, idx, status, tsig_secret, state_secret, api_token_hash, log_ingest_token, log_read_token, dashboard_password, state_secret_reissued, dashboard_org, created_at, updated_at`
 
 func scanTenant(row pgx.Row) (tenant.Record, error) {
 	var r tenant.Record
 	var status string
 	err := row.Scan(&r.Name, &r.Index, &status, &r.Secrets.TSIG, &r.Secrets.State, &r.Secrets.APITokenHash,
-		&r.Secrets.LogIngest, &r.Secrets.LogRead, &r.Secrets.DashboardPassword, &r.DashboardOrg,
+		&r.Secrets.LogIngest, &r.Secrets.LogRead, &r.Secrets.DashboardPassword, &r.Secrets.StateReissued, &r.DashboardOrg,
 		&r.CreatedAt, &r.UpdatedAt)
 	r.Status = tenant.Status(status)
 	return r, err
@@ -328,9 +328,9 @@ func (p *Postgres) SetSecrets(ctx context.Context, name string, s tenant.Secrets
 	return p.execOne(ctx,
 		`UPDATE tenants SET tsig_secret = $2, state_secret = $3, api_token_hash = $4,
 		                    log_ingest_token = $5, log_read_token = $6, dashboard_password = $7,
-		                    updated_at = now()
+		                    state_secret_reissued = $8, updated_at = now()
 		  WHERE name = $1`,
-		name, s.TSIG, s.State, s.APITokenHash, s.LogIngest, s.LogRead, s.DashboardPassword)
+		name, s.TSIG, s.State, s.APITokenHash, s.LogIngest, s.LogRead, s.DashboardPassword, s.StateReissued)
 }
 
 func (p *Postgres) SetDashboardOrg(ctx context.Context, name string, orgID int) error {

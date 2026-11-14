@@ -1,0 +1,13 @@
+-- Whether the tenant's state-store secret was reissued by the operator since
+-- the tenant last supplied it (CHG-0060, CHG-0067).
+--
+-- A reissue changes the store and the tenant's .backend.env, but not the copy
+-- in the tenant's Terraform state. A restore sends that copy back, and supplied
+-- secrets win (ADR-0015 §4), so without this a restore undid the reissue and
+-- locked the tenant out of its own state. While it is set, a restore over the
+-- registry keeps the stored secret and returns it, so the tenant's state takes
+-- it up; a restore that supplies the stored secret clears it.
+--
+-- A lost registry loses this with everything else, and the tenant's copy is
+-- then the only one: that restore still wins, as before.
+ALTER TABLE tenants ADD COLUMN state_secret_reissued boolean NOT NULL DEFAULT false;
