@@ -163,6 +163,7 @@ They need no credential of their own. The service's AppRole policy must allow `u
 |---|---|
 | `DEEVNET_TENANT_SECRETS_NAMESPACE` | the parent namespace in OpenBao every tenant's own sits under, for example `tenants`; turns tenant secrets on. It needs `OPENBAO_ADDR` |
 | `DEEVNET_TENANT_SECRETS_ADDR` | the OpenBao address tenants' workloads log in at, handed to the tenant with each reader, for example `https://bao.site.example.net:8200`. Required with the namespace |
+| `DEEVNET_TENANT_SECRETS_SOURCE_CIDRS` | optional, comma-separated CIDRs every reader's credential is bound to in place of its workload's own address. Set it where the tenant fabric source-NATs traffic leaving it, to the exit node's address as OpenBao sees it, for example `10.20.50.22/32` |
 
 They need no credential of their own: the service's AppRole does the work, and its policy must
 grant it administration below the parent namespace and nothing above it. On the KV mount it needs

@@ -513,4 +513,10 @@ func TestTenantSecretsMisconfigured(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "DEEVNET_TENANT_SECRETS_ADDR") {
 		t.Fatalf("without an address: err = %v", err)
 	}
+	e["DEEVNET_TENANT_SECRETS_ADDR"] = "https://bao.site.example:8200"
+	e["DEEVNET_TENANT_SECRETS_SOURCE_CIDRS"] = "10.20.50.22/32, 10.20.50.22"
+	_, err = tenantService(context.Background(), env(e))
+	if err == nil || !strings.Contains(err.Error(), "DEEVNET_TENANT_SECRETS_SOURCE_CIDRS") {
+		t.Fatalf("with a bare address for a CIDR: err = %v", err)
+	}
 }

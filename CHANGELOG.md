@@ -6,6 +6,22 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## Unreleased
+
+### Changed
+
+- **A reader can be bound to the tenant fabric's exit node** instead of its workload's address
+  (CHG-0067). Where the fabric source-NATs traffic leaving it, OpenBao sees one address for every
+  workload, so a binding to the workload's own could never match: every login from the workload was
+  refused. Bound to the exit node, a reader's credential works only from inside the fabric.
+
+### Upgrading
+
+- New, optional: `DEEVNET_TENANT_SECRETS_SOURCE_CIDRS`, comma-separated CIDRs. Set it at a site
+  whose tenant fabric source-NATs (mobile: `10.20.50.22/32`); readers issued before it still name
+  the workload's address, and the next apply of each `deevnet_secret_reader` (or a `PUT`) rebinds
+  it.
+
 ## 0.22.0 (2026-11-14)
 
 ### Changed

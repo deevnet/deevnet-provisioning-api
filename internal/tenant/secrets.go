@@ -358,7 +358,7 @@ func (s *Service) PutSecretReader(ctx context.Context, tenantName, name, workloa
 			TokenMaxTTL:     "24h",
 			SecretIDTTL:     "0",
 			SecretIDNumUses: 0,
-			BoundCIDRs:      []string{w.Address + "/32"},
+			BoundCIDRs:      s.readerCIDRs(w.Address),
 		}); err != nil {
 			return err
 		}
@@ -448,4 +448,13 @@ func (s *Service) removeWorkloadReaders(ctx context.Context, tenantName, workloa
 		}
 	}
 	return nil
+}
+
+// readerCIDRs is what a reader's credential is bound to: the site's fabric
+// exit addresses when it names them, or else the workload's own address.
+func (s *Service) readerCIDRs(workloadAddr string) []string {
+	if len(s.SecretsSourceCIDRs) > 0 {
+		return append([]string(nil), s.SecretsSourceCIDRs...)
+	}
+	return []string{workloadAddr + "/32"}
 }
