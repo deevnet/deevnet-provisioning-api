@@ -145,6 +145,11 @@ type Site struct {
 	// endpoint. It is not validated below for that reason.
 	LogEndpoint string
 
+	// The metrics store tenants are offered (ADR-0023, CHG-0070), behind the
+	// same proxy and written and read with the same tokens as the logs.
+	// Optional in the same way: empty, and the tenant is told no endpoint.
+	MetricsEndpoint string
+
 	// The dashboard server tenants log in to (ADR-0024). Optional in the same
 	// way: a site without one gives the tenant no dashboard block.
 	DashboardURL string

@@ -33,6 +33,45 @@ func TestDataSourceContractIsPinned(t *testing.T) {
 	}
 }
 
+// The metrics data sources are pinned like the log ones, and none of them is
+// the default: the device logs stay the organisation's default.
+func TestMetricsDataSourceContractIsPinned(t *testing.T) {
+	want := map[string]int{"deevnet-metrics-workloads": 0}
+	if len(MetricsDataSources) != len(want) {
+		t.Fatalf("%d metrics data sources, want %d", len(MetricsDataSources), len(want))
+	}
+	for _, ds := range MetricsDataSources {
+		if p, ok := want[ds.UID]; !ok || p != ds.Project || !ds.Metrics || ds.Default {
+			t.Errorf("metrics data source %+v is not in the contract", ds)
+		}
+	}
+}
+
+func TestMetricsDataSourcesOnlyWhereTheSiteHasMetrics(t *testing.T) {
+	without := &Client{cfg: Config{LogEndpoint: "https://logs"}}
+	if n := len(without.dataSources()); n != len(DataSources) {
+		t.Errorf("%d data sources with no metrics endpoint, want %d", n, len(DataSources))
+	}
+	with := &Client{cfg: Config{LogEndpoint: "https://logs", MetricsEndpoint: "https://metrics"}}
+	if n := len(with.dataSources()); n != len(DataSources)+len(MetricsDataSources) {
+		t.Errorf("%d data sources with a metrics endpoint, want %d", n, len(DataSources)+len(MetricsDataSources))
+	}
+}
+
+func TestMetricsDataSourceBodyIsPrometheusWithTheSameSecrets(t *testing.T) {
+	b := DataSourceBody(MetricsDataSources[0], 3, "tok", "https://metrics", "CA")
+	if b["type"] != PrometheusType || b["url"] != "https://metrics" {
+		t.Fatalf("type %v url %v", b["type"], b["url"])
+	}
+	sec := b["secureJsonData"].(map[string]string)
+	if sec["httpHeaderValue1"] != "Bearer tok" || sec["httpHeaderValue2"] != "3-0" {
+		t.Fatalf("secureJsonData = %v", sec)
+	}
+	if strings.Contains(fmt.Sprint(b["jsonData"]), "tok") {
+		t.Fatal("the token is in jsonData")
+	}
+}
+
 // The partition header carries index-project, and the token goes in as a
 // bearer. Neither may ever be in jsonData, which the server hands back to
 // anyone who can read the data source.

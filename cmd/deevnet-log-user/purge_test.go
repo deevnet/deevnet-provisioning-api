@@ -234,3 +234,77 @@ func TestPurgeAgainstVictoriaLogs(t *testing.T) {
 		t.Fatalf("purge again: %v", err)
 	}
 }
+
+// fakeVMSelect answers vmselect's delete API: the partition in the path, the
+// key in the form, 204 on success.
+type fakeVMSelect struct {
+	mu      sync.Mutex
+	key     string
+	deleted []string
+}
+
+func (f *fakeVMSelect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_ = r.ParseForm()
+	var part string
+	if _, err := fmt.Sscanf(r.URL.Path, "/delete/%s", &part); err != nil || r.Method != http.MethodPost ||
+		!strings.HasSuffix(r.URL.Path, "/prometheus/api/v1/admin/tsdb/delete_series") {
+		http.NotFound(w, r)
+		return
+	}
+	if r.PostForm.Get("authKey") != f.key || r.URL.Query().Get("authKey") != "" {
+		http.Error(w, "bad authKey", http.StatusUnauthorized)
+		return
+	}
+	if r.Form.Get("match[]") == "" {
+		http.Error(w, "no match[]", http.StatusBadRequest)
+		return
+	}
+	f.deleted = append(f.deleted, strings.SplitN(part, "/", 2)[0])
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func TestPurgeDeletesTheTenantsMetricsToo(t *testing.T) {
+	logs := httptest.NewServer(&fakeStore{})
+	defer logs.Close()
+	vm := &fakeVMSelect{key: "the-delete-key"}
+	metrics := httptest.NewServer(vm)
+	defer metrics.Close()
+	cfg := purgeConfig(t, logs.URL)
+	cfg.MetricsDeleteURL = metrics.URL
+	cfg.MetricsDeleteKeyFile = filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(cfg.MetricsDeleteKeyFile, []byte("the-delete-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := purge(context.Background(), cfg, purgeReq("trm", 5)); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if got := strings.Join(vm.deleted, ","); got != "5:0,5:1" {
+		t.Errorf("deleted metrics partitions %s, want 5:0,5:1 and nothing else", got)
+	}
+}
+
+func TestPurgeRefusesHalfAMetricsConfiguration(t *testing.T) {
+	logs := httptest.NewServer(&fakeStore{})
+	defer logs.Close()
+	cfg := purgeConfig(t, logs.URL)
+	cfg.MetricsDeleteURL = "http://127.0.0.1:1"
+	if err := purge(context.Background(), cfg, purgeReq("trm", 5)); !errors.Is(err, errPurgeRefused) {
+		t.Fatalf("purge with a URL and no key: %v", err)
+	}
+}
+
+func TestPurgeFailsOnARefusedMetricsDelete(t *testing.T) {
+	logs := httptest.NewServer(&fakeStore{})
+	defer logs.Close()
+	metrics := httptest.NewServer(&fakeVMSelect{key: "right"})
+	defer metrics.Close()
+	cfg := purgeConfig(t, logs.URL)
+	cfg.MetricsDeleteURL = metrics.URL
+	cfg.MetricsDeleteKeyFile = filepath.Join(t.TempDir(), "key")
+	_ = os.WriteFile(cfg.MetricsDeleteKeyFile, []byte("wrong"), 0o600)
+	if err := purge(context.Background(), cfg, purgeReq("trm", 5)); err == nil {
+		t.Fatal("purge succeeded with the metrics store refusing the key")
+	}
+}

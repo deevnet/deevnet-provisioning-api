@@ -25,6 +25,10 @@ func TestCreateReturnsLogTokensAndReconcileReturnsThemAgain(t *testing.T) {
 	if h := dig(out, "log", "select_header"); h != "X-Deevnet-Partition" {
 		t.Errorf("select_header = %v", h)
 	}
+	// The metrics store takes the same tokens (ADR-0023 §2, CHG-0070).
+	if m := dig(out, "log", "metrics_endpoint"); m != "https://metrics.mobile.deevnet.net" {
+		t.Errorf("metrics_endpoint = %v", m)
+	}
 
 	// A plain read never carries them.
 	_, out = call(t, h, http.MethodGet, "/v1/tenants/eds", "")

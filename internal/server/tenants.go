@@ -160,6 +160,10 @@ type logView struct {
 	IngestToken  string `json:"ingest_token,omitempty"`
 	ReadToken    string `json:"read_token,omitempty"`
 	SelectHeader string `json:"select_header,omitempty"`
+	// MetricsEndpoint is the metrics store, written and read with the same two
+	// tokens and the same select header (ADR-0023 §2). Absent at a site with
+	// none.
+	MetricsEndpoint string `json:"metrics_endpoint,omitempty"`
 }
 
 // dashboardView is the tenant's login to the dashboard server (ADR-0024,
@@ -239,7 +243,8 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 			// How a reader asks for a partition other than its own workloads':
 			// vmauth matches this header and then sets the store's own headers
 			// itself, so it selects only among the partitions this tenant has.
-			SelectHeader: "X-Deevnet-Partition",
+			SelectHeader:    "X-Deevnet-Partition",
+			MetricsEndpoint: site.MetricsEndpoint,
 		},
 		SecretsStored: !rec.Secrets.Unreadable,
 		// Told only once the server has the tenant: before that there is no

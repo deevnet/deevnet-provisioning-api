@@ -198,3 +198,125 @@ func TestNoRouteReachesTheDeleteAPI(t *testing.T) {
 		}
 	}
 }
+
+func renderTwoWithMetrics(t *testing.T) string {
+	t.Helper()
+	edsIngest, edsRead := tokens(0)
+	tdemoIngest, tdemoRead := tokens(1)
+	doc, err := render(
+		base{Backend: "http://127.0.0.1:9428/", OperatorToken: strings.Repeat("o", 64), BridgeToken: strings.Repeat("z", 64),
+			MetricsInsert: "http://127.0.0.1:8480/", MetricsSelect: "http://127.0.0.1:8481"},
+		[]tenantFile{
+			{Version: 1, Tenant: "eds", Index: 2, IngestToken: edsIngest, ReadToken: edsRead},
+			{Version: 1, Tenant: "tdemo", Index: 1, IngestToken: tdemoIngest, ReadToken: tdemoRead},
+		})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return string(doc)
+}
+
+// Without the metrics backends, nothing changes: a store with no metrics gets
+// exactly the log routes it had.
+func TestNoMetricsRoutesWithoutMetricsBackends(t *testing.T) {
+	if doc := renderTwo(t); strings.Contains(doc, "/api/v1/") || strings.Contains(doc, "prometheus") {
+		t.Fatalf("metrics routes rendered with no metrics backend:\n%s", doc)
+	}
+}
+
+func TestRenderRefusesHalfAMetricsBackend(t *testing.T) {
+	fine := []tenantFile{{Version: 1, Tenant: "eds", Index: 2, IngestToken: strings.Repeat("a", 64), ReadToken: strings.Repeat("b", 64)}}
+	for name, b := range map[string]base{
+		"insert only": {MetricsInsert: "http://127.0.0.1:8480"},
+		"select only": {MetricsSelect: "http://127.0.0.1:8481"},
+		"not http":    {MetricsInsert: "127.0.0.1:8480", MetricsSelect: "http://127.0.0.1:8481"},
+	} {
+		b.Backend, b.OperatorToken = "http://127.0.0.1:9428/", strings.Repeat("o", 64)
+		if _, err := render(b, fine); err == nil {
+			t.Errorf("%s: rendered", name)
+		}
+	}
+}
+
+func TestIngestUserWritesMetricsToItsOwnPartitionOnly(t *testing.T) {
+	block := userBlock(t, renderTwoWithMetrics(t), "ingest-eds")
+	if !strings.Contains(block, `url_prefix: "http://127.0.0.1:8480/insert/2:0/prometheus"`) {
+		t.Errorf("the ingest user does not write metrics to (2,0):\n%s", block)
+	}
+	for _, bad := range []string{"/select/", "8481", "/insert/1:", "/insert/2:1", "/api/v1/query"} {
+		if strings.Contains(block, bad) {
+			t.Errorf("the ingest user's block contains %q:\n%s", bad, block)
+		}
+	}
+}
+
+func TestReadUserReadsItsTwoMetricsPartitionsAndNoOthers(t *testing.T) {
+	block := userBlock(t, renderTwoWithMetrics(t), "read-eds")
+	for _, want := range []string{
+		`url_prefix: "http://127.0.0.1:8481/select/2:0/prometheus"`,
+		`url_prefix: "http://127.0.0.1:8481/select/2:1/prometheus"`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the read user has no %s:\n%s", want, block)
+		}
+	}
+	for _, bad := range []string{"8480", "/select/2:2", "/select/1:", "/api/v1/write", "/api/v1/import"} {
+		if strings.Contains(block, bad) {
+			t.Errorf("the read user's block contains %q:\n%s", bad, block)
+		}
+	}
+	// Its own (2,0) is the default, as for the logs: a metrics catch-all.
+	var catchAll bool
+	for _, e := range strings.Split(block, "- src_paths:")[1:] {
+		if strings.Contains(e, "/api/v1/(query") && !strings.Contains(e, "src_headers") {
+			if !strings.Contains(e, "/select/2:0/prometheus") {
+				t.Errorf("the metrics catch-all is not (2,0):\n%s", e)
+			}
+			catchAll = true
+		}
+	}
+	if !catchAll {
+		t.Errorf("no metrics catch-all:\n%s", block)
+	}
+}
+
+// The operator reads one tenant's metrics at a time, and only by naming it:
+// there is no substrate metrics partition to fall back on.
+func TestOperatorMetricsRoutesAreAllSelected(t *testing.T) {
+	block := userBlock(t, renderTwoWithMetrics(t), "operator-read")
+	n := 0
+	for _, e := range strings.Split(block, "- src_paths:")[1:] {
+		if !strings.Contains(e, "/api/v1/") {
+			continue
+		}
+		n++
+		if !strings.Contains(e, "src_headers") {
+			t.Errorf("an operator metrics route with no selector:\n%s", e)
+		}
+	}
+	if n != 4 {
+		t.Errorf("%d operator metrics routes, want 4 (two tenants, two partitions)", n)
+	}
+}
+
+// The store's multitenant and delete endpoints are always on (CHG-0070, Step
+// 1). No route may name them, and every metrics route must be one of the
+// fixed Prometheus paths, so no caller can reach them by its choice of path.
+func TestNoMetricsRouteReachesMultitenantOrDelete(t *testing.T) {
+	doc := renderTwoWithMetrics(t)
+	for _, bad := range []string{"multitenant", "delete", "/admin/"} {
+		if strings.Contains(doc, bad) {
+			t.Errorf("the rendered configuration mentions %q", bad)
+		}
+	}
+	for _, line := range strings.Split(doc, "\n") {
+		if !strings.Contains(line, "src_paths") {
+			continue
+		}
+		switch strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- src_paths:")) {
+		case selectPaths, insertPaths, metricsWritePaths, metricsReadPaths:
+		default:
+			t.Errorf("an unexpected route: %s", strings.TrimSpace(line))
+		}
+	}
+}
