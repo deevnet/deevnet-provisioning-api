@@ -8,6 +8,8 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.24.0 (2026-11-14)
+
 ### Changed
 
 - **Tenant metrics** (ADR-0023 step A, CHG-0070), an optional service. Where the site sets
