@@ -490,6 +490,38 @@ func TestADeletedNameRefusesEveryToken(t *testing.T) {
 	}
 }
 
+// A name deleted once and admitted again stays on the deleted list, but its
+// live tenant still restores over its surviving registry with its current
+// token, as the provider does to fetch credentials it never received. Any
+// other token for the name is still refused (tdemo, CHG-0067).
+func TestARegisteredTenantRestoresWithItsLiveTokenAfterItsNameWasDeleted(t *testing.T) {
+	svc, st, _ := tenanttest.NewService()
+	old, _ := testTokens.Issue("tdemo")
+	st.MarkDeleted("tdemo")
+	res, err := svc.Create(ctx, tenant.CreateRequest{Name: "tdemo"})
+	if err != nil {
+		t.Fatalf("admitted again: %v", err)
+	}
+	live := tenant.CreateRequest{Name: "tdemo", TSIGSecret: res.Issued.TSIGSecret, StateSecret: res.Issued.StateSecret, APIToken: res.Issued.APIToken}
+	got, err := svc.Create(ctx, live)
+	if err != nil {
+		t.Fatalf("restore with the live token: %v", err)
+	}
+	if got.Outcome != tenant.OutcomeReconciled {
+		t.Errorf("outcome = %s, want reconciled", got.Outcome)
+	}
+
+	stale := live
+	stale.APIToken = old
+	var inv *tenant.InvalidError
+	if _, err := svc.Create(ctx, stale); !errors.As(err, &inv) {
+		t.Fatalf("restore over the live tenant with the deleted name's old token: %v, want an InvalidError", err)
+	}
+	if c, ok, err := svc.Authenticate(ctx, res.Issued.APIToken); err != nil || !ok || !c.Registered {
+		t.Fatalf("the live token stopped working: %+v %v %v", c, ok, err)
+	}
+}
+
 func TestIndexExhaustion(t *testing.T) {
 	svc, st, _ := tenanttest.NewService()
 	for n := tenant.MinIndex; n <= tenant.MaxAllocatable; n++ {
