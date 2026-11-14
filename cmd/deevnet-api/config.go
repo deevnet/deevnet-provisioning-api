@@ -194,6 +194,12 @@ var openbaoEnv = []string{
 //	DEEVNET_TENANT_SECRETS_ADDR      the OpenBao address tenants' workloads
 //	                                 log in at, handed to the tenant with each
 //	                                 reader: https://bao.mobile.deevnet.net:8200
+//	DEEVNET_TENANT_SECRETS_SOURCE_CIDRS unset: each reader is bound to its
+//	                                 workload's own address. Set (comma-
+//	                                 separated CIDRs), every reader is bound
+//	                                 to these instead: the tenant fabric's
+//	                                 exit node where it source-NATs, as
+//	                                 OpenBao sees it: 10.20.50.22/32
 //
 //	DEEVNET_GRAFANA_ADMIN_USER     "admin"
 //	DEEVNET_BROKER_CONNECT_TIMEOUT "10s": reaching the messaging VM
@@ -249,9 +255,19 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	// is no use to a workload without the address to log in at. Both are
 	// startup failures rather than a reader route that fails later.
 	secretsNS := strings.Trim(getenv("DEEVNET_TENANT_SECRETS_NAMESPACE"), "/")
+	var secretsCIDRs []string
 	if secretsNS != "" {
 		if getenv("OPENBAO_ADDR") == "" {
 			return wiring{}, errors.New("DEEVNET_TENANT_SECRETS_NAMESPACE is set, but OPENBAO_ADDR is not: tenant secrets are in OpenBao")
+		}
+		for _, c := range strings.Split(getenv("DEEVNET_TENANT_SECRETS_SOURCE_CIDRS"), ",") {
+			if c = strings.TrimSpace(c); c == "" {
+				continue
+			}
+			if _, err := netip.ParsePrefix(c); err != nil {
+				return wiring{}, fmt.Errorf("DEEVNET_TENANT_SECRETS_SOURCE_CIDRS: %q is not a CIDR", c)
+			}
+			secretsCIDRs = append(secretsCIDRs, c)
 		}
 		if getenv("DEEVNET_TENANT_SECRETS_ADDR") == "" {
 			return wiring{}, errors.New("DEEVNET_TENANT_SECRETS_NAMESPACE is set, but DEEVNET_TENANT_SECRETS_ADDR is empty: workloads need the address to log in at")
@@ -465,6 +481,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		svc.TenantSecrets = bao
 		svc.SecretsNamespace = secretsNS
 		svc.SecretsAddr = getenv("DEEVNET_TENANT_SECRETS_ADDR")
+		svc.SecretsSourceCIDRs = secretsCIDRs
 	}
 	// Left nil without a range, so the address routes refuse with a reason.
 	if len(site.AddressRanges) > 0 {

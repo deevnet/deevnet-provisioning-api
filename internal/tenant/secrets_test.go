@@ -388,3 +388,21 @@ func TestWorkloadDeleteRemovesItsReaders(t *testing.T) {
 		t.Error("another workload's reader was revoked")
 	}
 }
+
+// A site whose fabric source-NATs binds every reader to its exit node, which
+// is the only address OpenBao sees a workload come from (CHG-0067).
+func TestReaderIsBoundToTheFabricExitWhenTheSiteNamesOne(t *testing.T) {
+	svc, _, b, w := readyTenantWithWorkload(t)
+	svc.SecretsSourceCIDRs = []string{"10.20.50.22/32"}
+	ctx := context.Background()
+	if _, err := svc.PutRuntimeSecret(ctx, "eds", "a", map[string]string{"k": "v"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutSecretReader(ctx, "eds", "backend", "web", []string{"a"}); err != nil {
+		t.Fatal(err)
+	}
+	role := b.Bao.Roles["tenants/eds/backend"]
+	if len(role.BoundCIDRs) != 1 || role.BoundCIDRs[0] != "10.20.50.22/32" {
+		t.Errorf("bound to %v, want the exit node, not %s", role.BoundCIDRs, w.Address)
+	}
+}

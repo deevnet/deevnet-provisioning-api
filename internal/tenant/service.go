@@ -115,6 +115,13 @@ type Service struct {
 	// SecretsAddr is the OpenBao address a tenant's workloads log in at,
 	// handed to the tenant with each reader.
 	SecretsAddr string
+	// SecretsSourceCIDRs, when set, are what every reader's credential is
+	// bound to, in place of its workload's own address. A site whose tenant
+	// fabric source-NATs traffic leaving it shows OpenBao one address for every
+	// workload (dv02hyp002p02's transit address at mobile), so a binding to the
+	// workload's address could never match; binding to the exit node keeps a
+	// leaked credential usable only from inside the fabric (CHG-0067).
+	SecretsSourceCIDRs []string
 	// Tokens issues and verifies tenant API tokens. Required.
 	Tokens *Tokens
 	// Enroller backs admission. Nil means only the operator creates tenants.
