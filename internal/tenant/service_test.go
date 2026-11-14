@@ -558,6 +558,54 @@ func TestRestoreOverTheRegistryKeepsLogTokensAndDashboardLogin(t *testing.T) {
 	}
 }
 
+// A reissue changes the state secret but not the tenant's copy in its
+// Terraform state. A restore with that stale copy keeps the reissued secret
+// and hands it back; once the tenant supplies it, the restore is ordinary.
+func TestRestoreKeepsAReissuedStateSecret(t *testing.T) {
+	svc, st, _ := tenanttest.NewService()
+	res, err := svc.Create(ctx, tenant.CreateRequest{Name: "eds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	re, err := svc.ReissueStateSecret(ctx, "eds")
+	if err != nil {
+		t.Fatalf("reissue: %v", err)
+	}
+	reissued := re.Issued.StateSecret
+	stale := tenant.CreateRequest{Name: "eds", TSIGSecret: res.Issued.TSIGSecret,
+		StateSecret: res.Issued.StateSecret, APIToken: res.Issued.APIToken}
+	got, err := svc.Create(ctx, stale)
+	if err != nil {
+		t.Fatalf("restore with the old state secret: %v", err)
+	}
+	if got.Issued.StateSecret != reissued {
+		t.Error("the restore did not hand back the reissued state secret")
+	}
+	if rec, _ := st.Get(ctx, "eds"); rec.Secrets.State != reissued || !rec.Secrets.StateReissued {
+		t.Error("the restore put the old state secret back")
+	}
+
+	// The tenant's state now holds the reissued secret and supplies it.
+	current := stale
+	current.StateSecret = reissued
+	if _, err := svc.Create(ctx, current); err != nil {
+		t.Fatalf("restore with the reissued secret: %v", err)
+	}
+	if rec, _ := st.Get(ctx, "eds"); rec.Secrets.StateReissued {
+		t.Error("supplying the reissued secret did not clear the mark")
+	}
+
+	// From then on supplied wins again, as for any restore.
+	moved := current
+	moved.StateSecret = "a-later-secret-the-tenant-supplies"
+	if _, err := svc.Create(ctx, moved); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := st.Get(ctx, "eds"); rec.Secrets.State != moved.StateSecret {
+		t.Error("a supplied state secret no longer won once the reissue was taken up")
+	}
+}
+
 func TestIndexExhaustion(t *testing.T) {
 	svc, st, _ := tenanttest.NewService()
 	for n := tenant.MinIndex; n <= tenant.MaxAllocatable; n++ {

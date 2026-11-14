@@ -385,12 +385,12 @@ paths:
 
         Mints a new secret for the tenant's user in the state store, records it, sets it on the
         store and returns it. The old secret stops working. This is the way back in for a tenant
-        that has lost the keys to its own state; the stored secret is never returned, by this or
-        any other route.
+        that has lost the keys to its own state.
 
-        The tenant's Terraform state still holds the old secret afterwards. A restore supplies the
-        secrets in state and they win, so a tenant given a new secret must not restore from its
-        old state.
+        The tenant's Terraform state still holds the old secret afterwards. A restore over the
+        registry that supplies it keeps the reissued secret instead, and returns it under
+        `state.secret_key`, so the tenant's state takes it up. Once a restore supplies the
+        reissued secret, supplied secrets win again.
 
         Refused with `400` while the tenant is deleting, or while the API holds secrets for it that
         it cannot read: the tenant supplies them again first. On a `502` no secret is returned and

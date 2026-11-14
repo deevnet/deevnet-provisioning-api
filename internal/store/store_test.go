@@ -146,7 +146,7 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := p.SetStatus(ctx, "tdemo", tenant.StatusReady); err != nil {
 		t.Fatal(err)
 	}
-	newSecrets := tenant.Secrets{TSIG: "bmV3", State: "new-state-secret", APITokenHash: tenant.HashToken("new")}
+	newSecrets := tenant.Secrets{TSIG: "bmV3", State: "new-state-secret", APITokenHash: tenant.HashToken("new"), StateReissued: true}
 	if err := p.SetSecrets(ctx, "tdemo", newSecrets); err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +157,9 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if got.Status != tenant.StatusReady || got.Secrets.State != "new-state-secret" || string(got.Secrets.APITokenHash) != string(tenant.HashToken("new")) {
 		t.Fatalf("got %+v", got)
+	}
+	if !got.Secrets.StateReissued {
+		t.Error("the state secret's reissue mark was not stored")
 	}
 	if len(got.Steps) != 2 {
 		t.Fatalf("steps = %+v, want dns and resolver", got.Steps)

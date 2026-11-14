@@ -6,6 +6,22 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## 0.22.5 (2026-11-14)
+
+### Fixed
+
+- **A restore no longer undoes a state-secret reissue.** A reissue changes the store and the
+  tenant's `.backend.env` but not the copy in its Terraform state, and a restore sent that old copy
+  back and won, locking the tenant out of its state again. A restore over the registry now keeps a
+  secret reissued since the tenant last supplied one, and returns it under `state.secret_key` so the
+  tenant's state takes it up; provider 0.10.2 accepts it. Once a restore supplies the reissued
+  secret, supplied secrets win again, and a restore after a lost registry is unchanged.
+
+### Upgrading
+
+- Migration `0014` adds `tenants.state_secret_reissued`, applied at startup. Secrets reissued
+  before it are not marked.
+
 ## 0.22.4 (2026-11-14)
 
 ### Fixed

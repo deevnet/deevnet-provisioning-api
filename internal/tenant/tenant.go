@@ -105,6 +105,10 @@ type Secrets struct {
 	// usable for the same reason as the log tokens: the server is told what it
 	// is, so an unreadable one is re-minted rather than asked for.
 	DashboardPassword string
+	// StateReissued is set by an operator's reissue of State, and cleared once
+	// the tenant supplies that secret itself. While it is set, the tenant's
+	// own copy is older than the registry's, so a restore keeps this one.
+	StateReissued bool
 	// Unreadable is set when a stored secret could not be opened - which is what
 	// a rebuilt or rotated Transit key leaves behind (ADR-0016 §6). It is not the
 	// same as a secret being empty, and the difference is the whole point: a

@@ -316,8 +316,17 @@ func (s *Service) restoreExisting(ctx context.Context, rec Record, req CreateReq
 		// afresh dropped them, and the steps then minted new ones, so every
 		// restore rotated a tenant's log tokens and dashboard login.
 		secrets.TSIG = req.TSIGSecret
-		secrets.State = req.StateSecret
 		secrets.APITokenHash = HashToken(req.APIToken)
+		// A state secret the operator reissued is newer than the tenant's
+		// copy, which still holds the one it replaced: keep it, and return it
+		// so the tenant's state takes it up. Sending the old one back would
+		// lock the tenant out of its state again (CHG-0060).
+		if secrets.StateReissued && !secrets.Unreadable && secrets.State != "" && req.StateSecret != secrets.State {
+			issued.StateSecret = secrets.State
+		} else {
+			secrets.State = req.StateSecret
+			secrets.StateReissued = false
+		}
 		secrets.Unreadable = false
 	} else {
 		// Resuming without secrets means the caller never received the first
@@ -406,6 +415,7 @@ func (s *Service) ReissueStateSecret(ctx context.Context, name string) (Result, 
 	}
 	secrets := rec.Secrets
 	secrets.State = state
+	secrets.StateReissued = true
 	if err := s.Store.SetSecrets(ctx, name, secrets); err != nil {
 		return Result{}, err
 	}
