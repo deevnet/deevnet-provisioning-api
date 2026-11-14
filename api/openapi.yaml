@@ -1357,8 +1357,9 @@ paths:
 
         **Admission.** The sum of `quota_gb` over every tenant's buckets may not pass the store's
         configured capacity. A bucket that would is refused with `409`, and the message says how
-        much is left. The store enforces a quota from its scanner, about a minute behind; a single
-        object larger than the quota is refused at once.
+        much is left. The store enforces a quota from its scanner, about a minute behind; a
+        single-part upload larger than the quota is refused at once, but a multipart upload is
+        counted only after it completes.
 
         `versioning` true enables versioning; false after true suspends it, because S3 cannot
         un-version a bucket. `lifecycle` expires current objects after `expire_days` and
