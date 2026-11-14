@@ -1001,6 +1001,7 @@ func MobileSite() tenant.Site {
 		DNSApexNS:         "dv02idn001v01.mobile.deevnet.net",
 		DNSUpdateFrom:     []string{"10.20.99.0/24", "10.20.10.0/24", "10.20.50.0/24"},
 		StateEndpoint:     "http://tfstate.mobile.deevnet.net:9000",
+		MetricsEndpoint:   "https://metrics.mobile.deevnet.net",
 		DashboardURL:      "https://dv02obs001v01.mobile.deevnet.net:3000",
 		StateBucket:       "tf-state",
 		ResolverForwardTo: "10.20.25.21",

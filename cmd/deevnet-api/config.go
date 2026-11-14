@@ -362,6 +362,7 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		DNSUpdateFrom:     updateFrom,
 		StateEndpoint:     getenv("DEEVNET_STATE_ENDPOINT"),
 		LogEndpoint:       getenv("DEEVNET_LOG_ENDPOINT"),
+		MetricsEndpoint:   getenv("DEEVNET_METRICS_ENDPOINT"),
 		DashboardURL:      getenv("DEEVNET_GRAFANA_URL"),
 		StateBucket:       getenv("DEEVNET_STATE_BUCKET"),
 		ResolverForwardTo: getenv("DEEVNET_RESOLVER_FORWARD_TO"),
@@ -619,6 +620,9 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			AdminPassword: creds["grafana_admin_password"],
 			CAFile:        getenv("DEEVNET_GRAFANA_CACERT"),
 			LogEndpoint:   getenv("DEEVNET_LOG_ENDPOINT"),
+			// Optional: where the site has a metrics store, each organisation
+			// also gets its metrics data sources (CHG-0070).
+			MetricsEndpoint: getenv("DEEVNET_METRICS_ENDPOINT"),
 		})
 		if err != nil {
 			return wiring{}, fmt.Errorf("dashboard server: %w", err)

@@ -67,7 +67,15 @@ type DataSource struct {
 	Project int
 	// Default is the organisation's default data source.
 	Default bool
+	// Metrics marks a metrics data source: Grafana's built-in Prometheus
+	// type, pointed at the metrics endpoint. Otherwise it is a log one.
+	Metrics bool
 }
+
+// PrometheusType is Grafana's built-in Prometheus data source, which reads the
+// metrics store (ADR-0023 §3, ADR-0024 §2): VictoriaMetrics' own plugin is
+// AGPL and pinned to narrow Grafana versions.
+const PrometheusType = "prometheus"
 
 // DataSources is the contract (ADR-0024 §2 as amended by CHG-0024). Change a
 // UID and every tenant's dashboards stop finding their data.
@@ -75,6 +83,14 @@ var DataSources = []DataSource{
 	{UID: "deevnet-logs-workloads", Name: "Workload logs", Project: 0},
 	{UID: "deevnet-logs-platform", Name: "Platform logs", Project: 1},
 	{UID: "deevnet-logs-devices", Name: "Device logs", Project: 2, Default: true},
+}
+
+// MetricsDataSources are written only where the site has a metrics store
+// (Config.MetricsEndpoint), and are a contract in the same way: a dashboard
+// names the UID (ADR-0023 §3, CHG-0070). deevnet-metrics-platform, for
+// (index, 1), joins them with the workloads' resource use (ADR-0023 step C).
+var MetricsDataSources = []DataSource{
+	{UID: "deevnet-metrics-workloads", Name: "Workload metrics", Project: 0, Metrics: true},
 }
 
 // TenantRole is what a tenant's login is in its own organisation. Never Admin:
@@ -96,7 +112,11 @@ type Config struct {
 	LogCA  string
 	// LogEndpoint is the log store as Grafana's server reaches it.
 	LogEndpoint string
-	Timeout     time.Duration
+	// MetricsEndpoint is the metrics store as Grafana's server reaches it.
+	// Optional: empty, and no metrics data source is written, which is a site
+	// with no metrics store, and the take-home Pi.
+	MetricsEndpoint string
+	Timeout         time.Duration
 }
 
 // Client is a tenant.Dashboards.
@@ -148,6 +168,14 @@ func New(cfg Config) (*Client, error) {
 
 var errNotFound = errors.New("not found")
 
+// dataSources is what this site writes into every tenant organisation.
+func (c *Client) dataSources() []DataSource {
+	if c.cfg.MetricsEndpoint == "" {
+		return DataSources
+	}
+	return append(append([]DataSource{}, DataSources...), MetricsDataSources...)
+}
+
 // statusError is a refusal from the server. Its message is Grafana's own,
 // which names what was wrong and never echoes a password.
 type statusError struct {
@@ -178,7 +206,7 @@ func (c *Client) Ensure(ctx context.Context, t tenant.DashTenant) (int, error) {
 	if err := c.ensureUser(ctx, t, org); err != nil {
 		return 0, fmt.Errorf("login: %w", err)
 	}
-	for _, ds := range DataSources {
+	for _, ds := range c.dataSources() {
 		if err := c.ensureDataSource(ctx, org, t, ds); err != nil {
 			return 0, fmt.Errorf("data source %s: %w", ds.UID, err)
 		}
@@ -221,7 +249,10 @@ func (c *Client) Remove(ctx context.Context, name string) error {
 	}
 	// The data sources first: they hold the read token, and if the
 	// organisation itself cannot be deleted they must not outlive the tenant.
-	for _, ds := range DataSources {
+	// Every data source the contract has ever named, metrics included, whether
+	// or not this site writes them: a removal must not leave one behind
+	// because the site's configuration changed after it was written.
+	for _, ds := range append(append([]DataSource{}, DataSources...), MetricsDataSources...) {
 		err := c.do(ctx, http.MethodDelete, "/api/datasources/uid/"+url.PathEscape(ds.UID), org, nil, nil)
 		if err != nil && !isStatus(err, 404) {
 			return fmt.Errorf("data source %s: %w", ds.UID, err)
@@ -499,13 +530,21 @@ func (c *Client) ensureMembership(ctx context.Context, u user, login string, org
 
 // DataSourceBody is what is written for one data source. Exported for the
 // tests and for anything that needs to see the contract as the server does.
-func DataSourceBody(ds DataSource, index int, readToken, logEndpoint, logCA string) map[string]any {
+//
+// The endpoint is the log store's or the metrics store's, by ds.Metrics. Both
+// are behind the same vmauth, with the same certificate, the same read token
+// and the same partition header.
+func DataSourceBody(ds DataSource, index int, readToken, endpoint, logCA string) map[string]any {
+	typ := PluginID
+	if ds.Metrics {
+		typ = PrometheusType
+	}
 	return map[string]any{
 		"uid":       ds.UID,
 		"name":      ds.Name,
-		"type":      PluginID,
+		"type":      typ,
 		"access":    "proxy",
-		"url":       logEndpoint,
+		"url":       endpoint,
 		"isDefault": ds.Default,
 		"jsonData": map[string]any{
 			"httpHeaderName1":   "Authorization",
@@ -524,7 +563,11 @@ func DataSourceBody(ds DataSource, index int, readToken, logEndpoint, logCA stri
 // returns, so there is nothing to compare a rotated token against; a write is
 // the only way to know the data source carries the current one.
 func (c *Client) ensureDataSource(ctx context.Context, org int, t tenant.DashTenant, ds DataSource) error {
-	body := DataSourceBody(ds, t.Index, t.ReadToken, c.cfg.LogEndpoint, c.logCA)
+	endpoint := c.cfg.LogEndpoint
+	if ds.Metrics {
+		endpoint = c.cfg.MetricsEndpoint
+	}
+	body := DataSourceBody(ds, t.Index, t.ReadToken, endpoint, c.logCA)
 	path := "/api/datasources/uid/" + url.PathEscape(ds.UID)
 	err := c.do(ctx, http.MethodGet, path, org, nil, nil)
 	switch {

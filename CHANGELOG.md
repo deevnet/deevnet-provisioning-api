@@ -8,6 +8,28 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+### Changed
+
+- **Tenant metrics** (ADR-0023 step A, CHG-0070), an optional service. Where the site sets
+  `DEEVNET_METRICS_ENDPOINT`, a tenant writes and reads Prometheus metrics with the log tokens it
+  already holds, and the tenant view's `log` block carries `metrics_endpoint`.
+  - `deevnet-log-user` renders each tenant's metrics routes when its base file names
+    `metrics_insert` and `metrics_select`: the ingest token gets `/api/v1/write` and
+    `/api/v1/import/prometheus` into `(index, 0)`; the read token gets the Prometheus query paths
+    over `(index, 0)` and `(index, 1)`, selected with `X-Deevnet-Partition` as for the logs. The
+    paths are a fixed list, so no route can name the store's multitenant or delete endpoints.
+  - Each Grafana organization gains `deevnet-metrics-workloads`, a built-in Prometheus data source
+    with the tenant's read token. A removal deletes it wherever it exists.
+  - A purge also deletes the tenant's metrics, when the writer's config names
+    `metrics_delete_url` and `metrics_delete_key_file`.
+
+### Upgrading
+
+- Deploy `deevnet-log-user` before adding `metrics_insert`/`metrics_select` to its base file, or
+  `metrics_delete_url`/`metrics_delete_key_file` to its config: the old writer refuses fields it
+  doesn't know. Without them it renders and purges exactly as before.
+- `DEEVNET_METRICS_ENDPOINT` is optional. Unset, the API behaves as 0.23.0.
+
 ### Documentation
 
 - Tenant buckets: only a single-part upload larger than a quota is refused at once; a multipart

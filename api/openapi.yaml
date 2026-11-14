@@ -1900,10 +1900,13 @@ components:
     TenantLog:
       type: object
       description: |
-        The tenant's access to the log store. `account_id` is its partition family: project 0 is
-        what its own workloads ship, 1 what the substrate publishes about it, and 2 its devices'
-        logs arriving over MQTT. A reader selects between them with the `select_header`, for
-        example `X-Deevnet-Partition: 2-1`; without it a read returns project 0.
+        The tenant's access to the log store, and to the metrics store behind the same proxy.
+        `account_id` is its partition family: project 0 is what its own workloads ship, 1 what
+        the substrate publishes about it, and 2 its devices' logs arriving over MQTT. A reader
+        selects between them with the `select_header`, for example `X-Deevnet-Partition: 2-1`;
+        without it a read returns project 0. The same two tokens write and read metrics at
+        `metrics_endpoint` with the Prometheus API (`/api/v1/write` and the query paths); metrics
+        have projects 0 and 1 only.
       required: [account_id]
       properties:
         endpoint: { type: string, description: Absent at a site with no log store. }
@@ -1911,6 +1914,7 @@ components:
         select_header: { type: string }
         ingest_token: { type: string, description: Create and reconcile responses only. }
         read_token: { type: string, description: Create and reconcile responses only. }
+        metrics_endpoint: { type: string, description: Absent at a site with no metrics store. }
     TenantDashboard:
       type: object
       description: |
