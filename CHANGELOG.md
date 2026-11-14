@@ -6,6 +6,16 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## 0.22.2 (2026-11-14)
+
+### Fixed
+
+- **A tenant whose name was deleted once and admitted again can be restored over its registry.**
+  The deleted-name list refused every restore for the name, including the live tenant's own current
+  token, so a tenant re-admitted under a deleted name could never be reconciled from its state (found
+  on `tdemo`). A token whose hash is the registered tenant's own is now accepted; any other token for
+  a deleted name is refused as before.
+
 ## 0.22.1 (2026-11-14)
 
 ### Changed

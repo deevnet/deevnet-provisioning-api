@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -170,17 +171,29 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Result, error)
 		if name, ok := s.Tokens.Verify(req.APIToken); !ok || name != req.Name {
 			return Result{}, invalid("api_token was not issued for tenant %q", req.Name)
 		}
-		// A deleted tenant's token restores nothing (CHG-0065).
-		revoked, err := s.Store.Revoked(ctx, req.Name, HashToken(req.APIToken))
-		if err != nil {
-			return Result{}, err
-		}
-		if revoked {
-			return Result{}, invalid("api_token was revoked when tenant %q was deleted", req.Name)
-		}
 	}
 
 	rec, err := s.Store.Get(ctx, req.Name)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Result{}, err
+	}
+	// A deleted tenant's token restores nothing (CHG-0065). The registered
+	// tenant's own current token is the exception: a name deleted once and
+	// admitted again is on the deleted list for good, and without this its
+	// live tenant could never be restored over its surviving registry.
+	if req.APIToken != "" {
+		live := err == nil && subtle.ConstantTimeCompare(HashToken(req.APIToken), rec.Secrets.APITokenHash) == 1
+		if !live {
+			revoked, rerr := s.Store.Revoked(ctx, req.Name, HashToken(req.APIToken))
+			if rerr != nil {
+				return Result{}, rerr
+			}
+			if revoked {
+				return Result{}, invalid("api_token was revoked when tenant %q was deleted", req.Name)
+			}
+		}
+	}
+
 	switch {
 	case errors.Is(err, ErrNotFound):
 		res, err := s.createNew(ctx, req)
@@ -193,8 +206,6 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Result, error)
 			}
 		}
 		return res, err
-	case err != nil:
-		return Result{}, err
 	}
 
 	if rec.Status == StatusProvisioning {
