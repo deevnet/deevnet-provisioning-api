@@ -311,7 +311,14 @@ func (s *Service) restoreExisting(ctx context.Context, rec Record, req CreateReq
 
 	if req.suppliesAllSecrets() {
 		issued = Issued{TSIGSecret: req.TSIGSecret, StateSecret: req.StateSecret, APIToken: req.APIToken}
-		secrets = Secrets{TSIG: req.TSIGSecret, State: req.StateSecret, APITokenHash: HashToken(req.APIToken)}
+		// Only the three supplied secrets are replaced. The log tokens and the
+		// dashboard password are the registry's to keep: building the set
+		// afresh dropped them, and the steps then minted new ones, so every
+		// restore rotated a tenant's log tokens and dashboard login.
+		secrets.TSIG = req.TSIGSecret
+		secrets.State = req.StateSecret
+		secrets.APITokenHash = HashToken(req.APIToken)
+		secrets.Unreadable = false
 	} else {
 		// Resuming without secrets means the caller never received the first
 		// response, so the token it would need was never delivered. Issue a new

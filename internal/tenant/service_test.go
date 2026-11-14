@@ -525,6 +525,39 @@ func TestARegisteredTenantRestoresWithItsLiveTokenAfterItsNameWasDeleted(t *test
 	}
 }
 
+// A restore over the registry replaces the three secrets it supplies and
+// keeps the rest: the log tokens the store was given and the dashboard login
+// must survive, or every restore would break the tenant's log shipping.
+func TestRestoreOverTheRegistryKeepsLogTokensAndDashboardLogin(t *testing.T) {
+	svc, st, _ := tenanttest.NewService()
+	res, err := svc.Create(ctx, tenant.CreateRequest{Name: "eds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.Get(ctx, "eds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Secrets.LogIngest == "" {
+		t.Fatal("create left no log token to keep")
+	}
+	got, err := svc.Create(ctx, tenant.CreateRequest{Name: "eds", TSIGSecret: res.Issued.TSIGSecret,
+		StateSecret: res.Issued.StateSecret, APIToken: res.Issued.APIToken})
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	after, _ := st.Get(ctx, "eds")
+	if after.Secrets.LogIngest != before.Secrets.LogIngest || after.Secrets.LogRead != before.Secrets.LogRead {
+		t.Error("the restore rotated the log tokens")
+	}
+	if after.Secrets.DashboardPassword != before.Secrets.DashboardPassword {
+		t.Error("the restore rotated the dashboard password")
+	}
+	if got.Issued.LogIngestToken != before.Secrets.LogIngest || got.Issued.DashboardPassword != before.Secrets.DashboardPassword {
+		t.Error("the restore returned other credentials than the ones kept")
+	}
+}
+
 func TestIndexExhaustion(t *testing.T) {
 	svc, st, _ := tenanttest.NewService()
 	for n := tenant.MinIndex; n <= tenant.MaxAllocatable; n++ {

@@ -6,6 +6,16 @@ minor release may change behavior or configuration, and the notes say so under *
 One tag covers everything this repository builds: the API, the two writers
 (`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
 
+## 0.22.4 (2026-11-14)
+
+### Fixed
+
+- **A restore over a registered tenant no longer rotates its log tokens and dashboard password.** It
+  replaced the tenant's whole set of stored secrets with the three it supplies, so the log and
+  dashboard steps then minted new ones: a workload shipping logs with the old token was refused
+  until its `kit.env` was pushed again. A restore now replaces only the TSIG secret, state secret
+  and API token.
+
 ## 0.22.3 (2026-11-14)
 
 ### Fixed
