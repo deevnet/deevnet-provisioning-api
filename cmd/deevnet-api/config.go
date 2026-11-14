@@ -156,6 +156,17 @@ var grafanaCredentials = []string{
 	"grafana_admin_password",
 }
 
+// bucketEnv is what the API needs to give tenants buckets (ADR-0026 §3,
+// CHG-0069). BUCKET_STORE_ENDPOINT turns it on; the rest is then required.
+// Optional for the same reason as the others: an API with no bucket store
+// answers 503 on the bucket routes. The admin credential is the state store's
+// pair, and the store is verified with the state store's CA.
+var bucketEnv = []string{
+	"BUCKET_STORE_ENDPOINT",
+	"BUCKET_STORE_PUBLIC_ENDPOINT",
+	"BUCKET_STORE_CAPACITY_GB",
+}
+
 // openbaoEnv is what the API needs to reach OpenBao. OPENBAO_ADDR turns
 // OpenBao on; the rest are then required.
 var openbaoEnv = []string{
@@ -200,6 +211,14 @@ var openbaoEnv = []string{
 //	                                 to these instead: the tenant fabric's
 //	                                 exit node where it source-NATs, as
 //	                                 OpenBao sees it: 10.20.50.22/32
+//
+//	BUCKET_STORE_ENDPOINT        unset: the API has no bucket store, and the
+//	                             bucket routes answer 503 (CHG-0069). Set, it
+//	                             is the host[:port] the admin client dials,
+//	                             over TLS verified with MINIO_ADMIN_CACERT:
+//	                             s3.mobile.deevnet.net. It needs:
+//	BUCKET_STORE_PUBLIC_ENDPOINT what tenants are told: https://s3.mobile.deevnet.net
+//	BUCKET_STORE_CAPACITY_GB     what every tenant's quotas may sum to: 100
 //
 //	DEEVNET_GRAFANA_ADMIN_USER     "admin"
 //	DEEVNET_BROKER_CONNECT_TIMEOUT "10s": reaching the messaging VM
@@ -416,6 +435,21 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			}
 		}
 	}
+	bucketCapacity := 0
+	if getenv("BUCKET_STORE_ENDPOINT") != "" {
+		if missing := empty(getenv, bucketEnv); len(missing) > 0 {
+			return wiring{}, fmt.Errorf("BUCKET_STORE_ENDPOINT is set, but these are empty: %s", strings.Join(missing, ", "))
+		}
+		v := getenv("BUCKET_STORE_CAPACITY_GB")
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return wiring{}, fmt.Errorf("BUCKET_STORE_CAPACITY_GB must be a positive number of GB, not %q", v)
+		}
+		bucketCapacity = n
+		if getenv("MINIO_ADMIN_CACERT") == "" {
+			return wiring{}, errors.New("BUCKET_STORE_ENDPOINT is set, but MINIO_ADMIN_CACERT is empty: the bucket store is verified with it")
+		}
+	}
 	if err := site.Validate(); err != nil {
 		return wiring{}, fmt.Errorf("site: %w", err)
 	}
@@ -440,6 +474,17 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		boolEnv(getenv, "MINIO_ADMIN_TLS", false), getenv("MINIO_ADMIN_CACERT"))
 	if err != nil {
 		return wiring{}, fmt.Errorf("MINIO_ADMIN_ENDPOINT: %w", err)
+	}
+
+	// The bucket store (CHG-0069): a second store, always TLS, driven with the
+	// state store's admin pair and verified with its CA. Left nil without an
+	// endpoint, and the bucket routes answer 503.
+	var buckets *minio.Buckets
+	if bucketCapacity > 0 {
+		if buckets, err = minio.NewBuckets(getenv("BUCKET_STORE_ENDPOINT"), creds["minio_admin_access_key"], creds["minio_admin_secret_key"],
+			getenv("MINIO_ADMIN_CACERT")); err != nil {
+			return wiring{}, fmt.Errorf("BUCKET_STORE_ENDPOINT: %w", err)
+		}
 	}
 
 	// One Proxmox client reads the fabric and builds tenant networks and
@@ -482,6 +527,12 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		svc.SecretsNamespace = secretsNS
 		svc.SecretsAddr = getenv("DEEVNET_TENANT_SECRETS_ADDR")
 		svc.SecretsSourceCIDRs = secretsCIDRs
+	}
+	// Assigned only when set, as the enroller is.
+	if buckets != nil {
+		svc.Buckets = buckets
+		svc.BucketEndpoint = getenv("BUCKET_STORE_PUBLIC_ENDPOINT")
+		svc.BucketCapacityGB = bucketCapacity
 	}
 	// Left nil without a range, so the address routes refuse with a reason.
 	if len(site.AddressRanges) > 0 {

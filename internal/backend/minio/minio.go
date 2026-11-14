@@ -45,21 +45,31 @@ type Client struct {
 // because what crosses this connection is the admin credential that creates
 // every tenant's state-store user.
 func New(endpoint, accessKey, secretKey string, useTLS bool, caFile string) (*Client, error) {
+	a, s3, err := connect(endpoint, accessKey, secretKey, useTLS, caFile, miniogo.BucketLookupAuto)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{admin: a, s3: s3}, nil
+}
+
+// connect makes the admin and S3 clients one store is driven with, both with
+// the same credential and transport.
+func connect(endpoint, accessKey, secretKey string, useTLS bool, caFile string, lookup miniogo.BucketLookupType) (*madmin.AdminClient, *miniogo.Client, error) {
 	opts := &madmin.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: useTLS,
 	}
 	if useTLS {
 		if caFile == "" {
-			return nil, errors.New("TLS needs a CA file; this client does not skip verification")
+			return nil, nil, errors.New("TLS needs a CA file; this client does not skip verification")
 		}
 		raw, err := os.ReadFile(caFile)
 		if err != nil {
-			return nil, fmt.Errorf("state store CA: %w", err)
+			return nil, nil, fmt.Errorf("store CA: %w", err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(raw) {
-			return nil, fmt.Errorf("state store CA %s holds no certificate", caFile)
+			return nil, nil, fmt.Errorf("store CA %s holds no certificate", caFile)
 		}
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
@@ -67,13 +77,13 @@ func New(endpoint, accessKey, secretKey string, useTLS bool, caFile string) (*Cl
 	}
 	a, err := madmin.NewWithOptions(endpoint, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	s3, err := miniogo.New(endpoint, &miniogo.Options{Creds: opts.Creds, Secure: opts.Secure, Transport: opts.Transport})
+	s3, err := miniogo.New(endpoint, &miniogo.Options{Creds: opts.Creds, Secure: opts.Secure, Transport: opts.Transport, BucketLookup: lookup})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &Client{admin: a, s3: s3}, nil
+	return a, s3, nil
 }
 
 // PolicyName is the canned policy that confines one tenant, the same name the
@@ -158,9 +168,15 @@ func (c *Client) Purge(ctx context.Context, bucket, prefix string) error {
 	if !ok || !strings.HasSuffix(name, "/") || !tenant.ValidName(strings.TrimSuffix(name, "/")) {
 		return fmt.Errorf("refusing to purge %q: not a tenant's state prefix", prefix)
 	}
+	return purge(ctx, c.s3, bucket, prefix)
+}
+
+// purge deletes every version and delete marker under prefix in bucket, and
+// checks nothing is left. The caller decides what prefix it may be given.
+func purge(ctx context.Context, s3 *miniogo.Client, bucket, prefix string) error {
 	listCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	found := c.s3.ListObjects(listCtx, bucket, miniogo.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true})
+	found := s3.ListObjects(listCtx, bucket, miniogo.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true})
 	toDelete := make(chan miniogo.ObjectInfo)
 	var listErr error
 	go func() {
@@ -178,7 +194,7 @@ func (c *Client) Purge(ctx context.Context, bucket, prefix string) error {
 			}
 		}
 	}()
-	for e := range c.s3.RemoveObjects(ctx, bucket, toDelete, miniogo.RemoveObjectsOptions{}) {
+	for e := range s3.RemoveObjects(ctx, bucket, toDelete, miniogo.RemoveObjectsOptions{}) {
 		if e.Err != nil {
 			cancel()
 			for range toDelete {
@@ -190,7 +206,7 @@ func (c *Client) Purge(ctx context.Context, bucket, prefix string) error {
 		return fmt.Errorf("list versions under %s: %w", prefix, listErr)
 	}
 	// What a purge is for is "nothing left", so that is what it checks.
-	for o := range c.s3.ListObjects(ctx, bucket, miniogo.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true, MaxKeys: 1}) {
+	for o := range s3.ListObjects(ctx, bucket, miniogo.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true, MaxKeys: 1}) {
 		if o.Err != nil {
 			return fmt.Errorf("list versions under %s: %w", prefix, o.Err)
 		}

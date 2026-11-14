@@ -110,6 +110,14 @@ type Service struct {
 	// namespace of its own (ADR-0021, CHG-0067). Nil at a site that does not
 	// offer the service, where the secret routes refuse with a reason.
 	TenantSecrets SecretsBackend
+	// Buckets is the bucket store tenant buckets live in (ADR-0026 §3,
+	// CHG-0069). Nil when the API has none configured, and the bucket routes
+	// answer ErrBucketsNotOffered.
+	Buckets BucketStore
+	// BucketEndpoint is what tenants are told the store is at.
+	BucketEndpoint string
+	// BucketCapacityGB is what the sum of every tenant's quotas may reach.
+	BucketCapacityGB int
 	// SecretsNamespace is the parent of every tenant's namespace, "tenants":
 	// a tenant's is <SecretsNamespace>/<name>.
 	SecretsNamespace string
@@ -567,6 +575,15 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 			run  func() error
 		}{{StepDashboard, func() error { return s.removeDashboards(ctx, rec) }}}, steps...)
 	}
+	// Its buckets, with everything in them, and their keys (CHG-0069): the
+	// rows cascade away with the tenant's, and a bucket left in the store
+	// would belong to nobody, or to the next tenant admitted under this name.
+	if s.Buckets != nil {
+		steps = append([]struct {
+			name string
+			run  func() error
+		}{{StepBuckets, func() error { return s.removeBuckets(ctx, rec) }}}, steps...)
+	}
 	// The tenant's namespace first (ADR-0021 §1): every credential its
 	// workloads read with dies with it, before anything else of the tenant's
 	// goes. Its registry rows go with the tenant's row.
@@ -917,6 +934,15 @@ func (s *Service) ensure(ctx context.Context, rec Record) (Record, error) {
 			name string
 			run  func() error
 		}{StepSecrets, func() error { return s.ensureSecrets(ctx, rec) }})
+	}
+
+	// The tenant's buckets and their keys (CHG-0069). On a create there are
+	// none; on a reconcile this makes them again in a rebuilt store.
+	if s.Buckets != nil {
+		steps = append(steps, struct {
+			name string
+			run  func() error
+		}{StepBuckets, func() error { return s.ensureBuckets(ctx, rec) }})
 	}
 
 	for _, st := range steps {

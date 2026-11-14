@@ -520,3 +520,55 @@ func TestTenantSecretsMisconfigured(t *testing.T) {
 		t.Fatalf("with a bare address for a CIDR: err = %v", err)
 	}
 }
+
+// Every site deployed before CHG-0069 sets no bucket store. That must stay a
+// site that starts, with bucket routes that answer 503.
+func TestNoBucketStoreStillStarts(t *testing.T) {
+	w, err := tenantService(context.Background(), env(fullEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.tenants.Buckets != nil {
+		t.Error("no BUCKET_STORE_ENDPOINT should mean no bucket store")
+	}
+}
+
+func bucketEnvFor(t *testing.T) map[string]string {
+	t.Helper()
+	e := fullEnv()
+	e["BUCKET_STORE_ENDPOINT"] = "s3.mobile.deevnet.net"
+	e["BUCKET_STORE_PUBLIC_ENDPOINT"] = "https://s3.mobile.deevnet.net"
+	e["BUCKET_STORE_CAPACITY_GB"] = "100"
+	e["MINIO_ADMIN_CACERT"] = testCA(t)
+	return e
+}
+
+func TestBucketStoreWiredWhenConfigured(t *testing.T) {
+	w, err := tenantService(context.Background(), env(bucketEnvFor(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := w.tenants
+	if svc.Buckets == nil || svc.BucketEndpoint != "https://s3.mobile.deevnet.net" || svc.BucketCapacityGB != 100 {
+		t.Fatalf("bucket store not wired: %v %q %d", svc.Buckets != nil, svc.BucketEndpoint, svc.BucketCapacityGB)
+	}
+}
+
+func TestBucketStoreMisconfigured(t *testing.T) {
+	for _, tc := range []struct{ name, key, value, want string }{
+		{"no public endpoint", "BUCKET_STORE_PUBLIC_ENDPOINT", "", "BUCKET_STORE_PUBLIC_ENDPOINT"},
+		{"no capacity", "BUCKET_STORE_CAPACITY_GB", "", "BUCKET_STORE_CAPACITY_GB"},
+		{"capacity not a number", "BUCKET_STORE_CAPACITY_GB", "lots", "BUCKET_STORE_CAPACITY_GB"},
+		{"capacity zero", "BUCKET_STORE_CAPACITY_GB", "0", "BUCKET_STORE_CAPACITY_GB"},
+		{"no CA", "MINIO_ADMIN_CACERT", "", "MINIO_ADMIN_CACERT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := bucketEnvFor(t)
+			e[tc.key] = tc.value
+			_, err := tenantService(context.Background(), env(e))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to name %s", err, tc.want)
+			}
+		})
+	}
+}

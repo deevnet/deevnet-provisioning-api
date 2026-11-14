@@ -159,6 +159,12 @@ var wireSchemas = map[string]any{
 	"Secret":               secretView{},
 	"SecretReaderRequest":  secretReaderBody{},
 	"SecretReader":         secretReaderView{},
+	"BucketRequest":        bucketBody{},
+	"BucketUpdateRequest":  bucketUpdateBody{},
+	"BucketLifecycle":      bucketLifecycleView{},
+	"Bucket":               bucketView{},
+	"BucketKeyRequest":     bucketKeyBody{},
+	"BucketKey":            bucketKeyView{},
 	"EgressVRF":            tenant.EgressVRF{},
 }
 

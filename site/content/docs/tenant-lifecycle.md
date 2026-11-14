@@ -102,7 +102,7 @@ them moves between sites unchanged: `deevnet-logs-workloads` (project 0),
 
 **`POST /v1/tenants/{name}/reconcile` re-ensures every backend with the secrets the registry
 holds.** It is the operator's repair after a backend is rebuilt, and it puts device address
-reservations back as well.
+reservations back as well, and the tenant's buckets with their settings and keys.
 
 The answer carries no secrets, with one exception: the log tokens and the dashboard password are
 returned, which is how a tenant created before those stores existed is handed them.
@@ -138,7 +138,7 @@ row.** The operator or the tenant itself may call it.
 
 | Status | When |
 |---|---|
-| `204` | the tenant's secrets namespace, with every secret and reader in it, the broker accounts, address reservations, resolver forwards, zones, update key, state-store user, every version of the tenant's state objects, its log users and every log line in its partitions, and the dashboard login and organization are removed, along with everything the tenant saved there. The tenant's API token is revoked |
+| `204` | the tenant's secrets namespace, with every secret and reader in it, its buckets with every object in them and their keys, the broker accounts, address reservations, resolver forwards, zones, update key, state-store user, every version of the tenant's state objects, its log users and every log line in its partitions, and the dashboard login and organization are removed, along with everything the tenant saved there. The tenant's API token is revoked |
 | `409` | the tenant still has workloads, or the fabric still carries a zone of this name. The tenant destroys its own resources first |
 | `404` | not registered |
 | `502` | a backend step failed. The tenant is left `deleting`, and a second delete resumes it |

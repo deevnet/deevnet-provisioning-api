@@ -357,6 +357,22 @@ type Store interface {
 	ListSecretReaders(ctx context.Context, tenantName string) ([]SecretReader, error)
 	DeleteSecretReader(ctx context.Context, tenantName, name string) error
 
+	// Tenant buckets (ADR-0026 §3, CHG-0069). PutBucket inserts or updates a
+	// bucket under the allocation lock, refusing with a *CapacityError when a
+	// new bucket or a larger quota would take the sum of every tenant's quotas
+	// past capacityGB. A key's secret is sealed, as a Wi-Fi key's is.
+	PutBucket(ctx context.Context, b Bucket, capacityGB int) (Bucket, error)
+	GetBucket(ctx context.Context, tenantName, name string) (Bucket, error)
+	ListBuckets(ctx context.Context, tenantName string) ([]Bucket, error)
+	SetBucketStatus(ctx context.Context, tenantName, name string, status Status) error
+	// DeleteBucket removes the bucket's row and its keys' rows.
+	DeleteBucket(ctx context.Context, tenantName, name string) error
+	PutBucketKey(ctx context.Context, k BucketKey) (BucketKey, error)
+	GetBucketKey(ctx context.Context, tenantName, bucket, name string) (BucketKey, error)
+	ListBucketKeys(ctx context.Context, tenantName, bucket string) ([]BucketKey, error)
+	SetBucketKeyStatus(ctx context.Context, tenantName, bucket, name string, status Status) error
+	DeleteBucketKey(ctx context.Context, tenantName, bucket, name string) error
+
 	// Extra records (ADR-0015 §13).
 	PutRecord(ctx context.Context, r ExtraRecord) error
 	ListRecords(ctx context.Context, tenantName string) ([]ExtraRecord, error)

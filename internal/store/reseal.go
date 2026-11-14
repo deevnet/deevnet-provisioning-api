@@ -35,6 +35,7 @@ var sealedColumns = []struct {
 	{"tenants", []string{"name"}, []string{"tsig_secret", "state_secret", "log_ingest_token", "log_read_token", "dashboard_password"}},
 	{"tenant_wifi_keys", []string{"tenant", "name"}, []string{"psk"}},
 	{"admission_keys", []string{"tenant"}, []string{"psk"}},
+	{"tenant_bucket_keys", []string{"tenant", "bucket", "name"}, []string{"secret_key"}},
 }
 
 // Reseal moves every stored secret to the current Transit key (CHG-0036), one

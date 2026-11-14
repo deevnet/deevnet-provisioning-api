@@ -34,6 +34,8 @@ type Store struct {
 	runtimeSecrets map[string]tenant.RuntimeSecret
 	secretReaders  map[string]tenant.SecretReader
 	extraRecords   map[string]tenant.ExtraRecord
+	buckets        map[string]tenant.Bucket
+	bucketKeys     map[string]tenant.BucketKey
 	revoked        map[string]string
 	deletedNames   map[string]bool
 	AuditLog       []tenant.AuditEntry
@@ -166,6 +168,18 @@ func (s *Store) Delete(_ context.Context, name string) error {
 	for key, c := range s.certificates {
 		if c.Tenant == name {
 			delete(s.certificates, key)
+		}
+	}
+	// Buckets and their keys cascade too (0015_tenant_buckets.sql): the
+	// service has emptied the store of them before it gets here.
+	for key, b := range s.buckets {
+		if b.Tenant == name {
+			delete(s.buckets, key)
+		}
+	}
+	for key, k := range s.bucketKeys {
+		if k.Tenant == name {
+			delete(s.bucketKeys, key)
 		}
 	}
 	return nil
@@ -724,6 +738,9 @@ type Backends struct {
 	// Bao is OpenBao holding tenants' namespaces (ADR-0021).
 	Bao *Bao
 
+	// Buckets is the bucket store (CHG-0069).
+	Buckets *BucketStore
+
 	FailDNS, FailResolver, FailState, FailFabric error
 	FailNetwork, FailCompute, FailWireless       error
 }
@@ -745,6 +762,7 @@ func NewBackends() *Backends {
 		DashOrgs:       map[string]int{},
 		Signer:         NewSigner(),
 		Bao:            NewBao(),
+		Buckets:        NewBucketStore(),
 	}
 }
 
@@ -1160,7 +1178,11 @@ func NewService() (*tenant.Service, *Store, *Backends) {
 		LogWriter:    b.LogWriter(),
 		Dashboards:   b.Dashboards(),
 		Signer:       b.Signer,
-		Tokens:       tokens,
+
+		Buckets:          b.Buckets,
+		BucketEndpoint:   "https://s3.site.example",
+		BucketCapacityGB: 100,
+		Tokens:           tokens,
 
 		TenantSecrets:    b.Bao,
 		SecretsNamespace: "tenants",
