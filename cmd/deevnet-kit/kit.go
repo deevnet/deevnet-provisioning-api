@@ -22,7 +22,8 @@ import (
 )
 
 // The services the image runs, by unit name.
-var units = []string{"mosquitto", "victorialogs", "vmauth", "deevnet-log-bridge", "grafana", "deevnet-kit-dashboards"}
+var units = []string{"mosquitto", "victorialogs", "vmauth", "deevnet-log-bridge", "grafana", "deevnet-kit-dashboards",
+	"vmstorage", "vminsert", "vmselect", "alertmanager", "ntfy", "deevnet-kit-alerting"}
 
 const (
 	// The ports are Deevnet's, so an app moved from Deevnet changes a host
@@ -31,6 +32,15 @@ const (
 	logPort    = 8427
 	// Grafana's, as on Deevnet (CHG-0024).
 	dashboardPort = 3000
+	// Metrics are served by the same vmauth as logs, on the same port, as on
+	// Deevnet (CHG-0070); the paths tell them apart.
+	metricsPort = logPort
+
+	// The metrics store's vminsert and vmselect on loopback, the ports
+	// Deevnet's run on (CHG-0070). Given to deevnet-log-user, they make it
+	// render the same per-tenant metrics routes it renders on Deevnet.
+	metricsInsertURL = "http://127.0.0.1:8480/"
+	metricsSelectURL = "http://127.0.0.1:8481/"
 
 	// The bridge's broker account. The leading underscore keeps it out of
 	// the <tenant>-<name> space: no tenant name starts with one.
@@ -79,6 +89,13 @@ type state struct {
 	// and the domains its issuing CA may name.
 	OwnerOrg     string   `json:"owner_org,omitempty"`
 	OwnerDomains []string `json:"owner_domains,omitempty"`
+
+	// Alerting (CHG-0072). NotifyPassword is the phone's ntfy login, as the
+	// API issues it on Deevnet; PublisherPassword is Alertmanager's, the only
+	// login that may publish. Empty on a card made before alerting, and made
+	// by the first alerts command.
+	NotifyPassword    string `json:"notify_password,omitempty"`
+	PublisherPassword string `json:"publisher_password,omitempty"`
 }
 
 // kit holds the paths. root is empty on a Pi and a temporary directory in
@@ -134,10 +151,14 @@ func (k *kit) cmdInit(args []string) error {
 	}
 	st := state{Version: 1, Tenant: bc.Tenant, Index: bc.Index}
 	for _, t := range []*string{&st.OperatorToken, &st.IngestToken, &st.ReadToken, &st.BridgeStoreToken, &st.BridgePassword,
-		&st.GrafanaAdminPassword, &st.GrafanaSecretKey, &st.DashboardPassword} {
+		&st.GrafanaAdminPassword, &st.GrafanaSecretKey, &st.DashboardPassword, &st.PublisherPassword} {
 		if *t, err = randomHex(32); err != nil {
 			return err
 		}
+	}
+	// The API's length for the phone's login: 48 letters or digits.
+	if st.NotifyPassword, err = randomHex(24); err != nil {
+		return err
 	}
 	if err := validState(st); err != nil {
 		return err
@@ -305,6 +326,11 @@ func (k *kit) renderAllFrom(st state, reload bool) error {
 	if err := k.renderBroker(st, reload); err != nil {
 		return err
 	}
+	// Before the log store: deevnet-log-user hashes the publisher's
+	// password for ntfy each time it renders.
+	if err := k.writeAlertingFiles(st); err != nil {
+		return err
+	}
 	if err := k.renderLogStore(st, reload); err != nil {
 		return err
 	}
@@ -330,6 +356,8 @@ func (k *kit) renderLogStore(st state, reload bool) error {
 		"backend":        "http://127.0.0.1:9428/",
 		"operator_token": st.OperatorToken,
 		"bridge_token":   st.BridgeStoreToken,
+		"metrics_insert": metricsInsertURL,
+		"metrics_select": metricsSelectURL,
 	}
 	if err := writeJSON(filepath.Join(k.logDir(), "base.json"), base, 0o600); err != nil {
 		return err
@@ -427,8 +455,10 @@ LOG_INGEST_TOKEN=%s
 LOG_READ_TOKEN=%s
 LOG_SELECT_HEADER=X-Deevnet-Partition
 LOG_DEVICE_PARTITION=%d-2
+METRICS_ENDPOINT=https://%s:%d
 `, st.Tenant, h, st.Tenant, st.appHost("mqtt", h), brokerPort, caName, st.appHost("logs", h), logPort,
-		st.IngestToken, st.ReadToken, st.Index) + appEnv(app) + dashboardEnv(st, st.appHost("grafana", h))
+		st.IngestToken, st.ReadToken, st.Index, st.appHost("metrics", h), metricsPort) + appEnv(app) +
+		dashboardEnv(st, st.appHost("grafana", h)) + notifyEnv(st, h)
 }
 
 func (k *kit) cmdExport(args []string) error {
@@ -497,6 +527,7 @@ func (k *kit) cmdStatus() error {
 	}
 	fmt.Printf("broker   mqtts://%s:%d\n", st.appHost("mqtt", h), brokerPort)
 	fmt.Printf("logs     https://%s:%d  (device logs: X-Deevnet-Partition: %d-2)\n", st.appHost("logs", h), logPort, st.Index)
+	fmt.Printf("metrics  https://%s:%d  (the log tokens)\n", st.appHost("metrics", h), metricsPort)
 	if st.DashboardOrg > 0 {
 		fmt.Printf("grafana  https://%s:%d  (login %s; organisation %d)\n", st.appHost("grafana", h), dashboardPort, st.Tenant, st.DashboardOrg)
 	} else {
@@ -507,11 +538,20 @@ func (k *kit) cmdStatus() error {
 	for _, u := range units {
 		out, _ := exec.Command("systemctl", "is-active", u).Output()
 		s := strings.TrimSpace(string(out))
-		if s != "active" {
+		switch {
+		case s == "active":
+		case unitDisabled(u):
+			s = "off (disabled)"
+		default:
 			bad++
 		}
 		fmt.Printf("  %-20s %s\n", u, s)
 	}
+	groups, err := k.loadAlerts()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("alerts   %s  (%d rule group(s); deevnet-kit notify for the phone)\n", notifyURL(st, h), len(groups))
 	accts, err := k.loadAccounts()
 	if err != nil {
 		return err
@@ -534,6 +574,14 @@ func (k *kit) cmdStatus() error {
 }
 
 // --- helpers --------------------------------------------------------------------------
+
+// unitDisabled reports a unit the owner turned off, such as Grafana or the
+// metrics store on a 512 MB Pi: off by choice, not failed.
+func unitDisabled(u string) bool {
+	out, _ := exec.Command("systemctl", "is-enabled", u).Output()
+	s := strings.TrimSpace(string(out))
+	return s == "disabled" || s == "masked"
+}
 
 func randomHex(n int) (string, error) {
 	b := make([]byte, n)

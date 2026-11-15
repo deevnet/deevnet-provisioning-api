@@ -8,6 +8,35 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+### Added
+
+- **`deevnet-kit`: metrics and alerting on the take-home Pi** (CHG-0072), as on Deevnet (CHG-0070,
+  CHG-0071).
+  - The writer's base file names the Pi's metrics store (`metrics_insert`, `metrics_select` on
+    loopback), so `deevnet-log-user` renders the same per-tenant metrics routes it renders on
+    Deevnet. `kit.env` gains `METRICS_ENDPOINT`, and Grafana gains the `deevnet-metrics-workloads`
+    data source.
+  - `alerts import FILE|-` takes the tenant's rule groups as its Terraform exports them
+    (`terraform output -json alert_rules`), and sends `deevnet-log-user` the API's own `alerts`
+    request: the same checks, the same vmalert dry run, the same rendering. Also `alerts list`,
+    `alerts clear`, `alerts sync` (each boot, which also makes the phone's login) and `notify`,
+    the phone's ntfy settings.
+  - `init` makes the phone's ntfy login and Alertmanager's publisher password. `kit.env` gains
+    `NOTIFY_URL`, `NOTIFY_USERNAME` and `NOTIFY_PASSWORD`, the names tdemo's `kit_env` uses.
+  - The card's TLS names gain `metrics` and `ntfy`; a certificate change rewrites ntfy's URL and
+    restarts it.
+  - `selftest` checks the metrics path, another tenant's partition refused, Alertmanager, the
+    phone's login (reads its topics, publishes nowhere) and each loaded group's evaluation.
+    `status` and `selftest` report a unit the owner disabled as off, not failed.
+
+### Upgrading
+
+- **A Deevnet Pi needs a certificate naming `metrics` and `ntfy` too.** Request it with
+  `names = ["logs", "grafana", "metrics", "ntfy"]`; until then `status` warns, and those two
+  services fail to verify by name.
+- The kit needs an image with the metrics store, vmalert, Alertmanager and ntfy, and the
+  `alerting` block in `/etc/deevnet/log-user.json`.
+
 ## 0.25.0 (2026-11-15)
 
 ### Added

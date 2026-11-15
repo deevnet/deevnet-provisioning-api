@@ -80,7 +80,7 @@ func writeTemp(t *testing.T, name string, body []byte) string {
 }
 
 var edsNames = []string{"mqtt.eds.deevnet.net", "logs.eds.deevnet.net", "grafana.eds.deevnet.net",
-	"console.eds.deevnet.net", "mqtt.eds.home.deevnet.net"}
+	"metrics.eds.deevnet.net", "ntfy.eds.deevnet.net", "console.eds.deevnet.net", "mqtt.eds.home.deevnet.net"}
 
 // The whole move: a request, the factory's certificate for it, and after
 // install every service here dials and trusts the Deevnet names and root.
@@ -133,7 +133,7 @@ func TestACardBecomesADeevnetPi(t *testing.T) {
 
 	hosts, _ := os.ReadFile(k.hostsFile())
 	if !strings.Contains(string(hosts), "127.0.0.1 localhost") ||
-		!strings.Contains(string(hosts), "127.0.0.1 mqtt.eds.deevnet.net logs.eds.deevnet.net grafana.eds.deevnet.net") {
+		!strings.Contains(string(hosts), "127.0.0.1 mqtt.eds.deevnet.net logs.eds.deevnet.net grafana.eds.deevnet.net metrics.eds.deevnet.net ntfy.eds.deevnet.net") {
 		t.Errorf("hosts:\n%s", hosts)
 	}
 	bridge, _ := os.ReadFile(k.bridgeEnv())

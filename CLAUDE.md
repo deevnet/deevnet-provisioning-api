@@ -121,7 +121,9 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   `users.d/<tenant>.json`, and `deevnet-log-user` renders the file from both. Don't make either side
   write `auth.yml` directly.
 - **`cmd/deevnet-kit` is the API's stand-in on a take-home Pi** (Mosquitto, VictoriaLogs, vmauth, the
-  log bridge). It lives here so it imports `brokeracct` and `tenant` rather than copying their rules,
+  log bridge, and since CHG-0072 the metrics store, vmalert, Alertmanager and ntfy). It sends
+  `deevnet-log-user` the API's own `alerts` request for rules exported from the tenant's
+  Terraform: don't give the kit an alerting path of its own. It lives here so it imports `brokeracct` and `tenant` rather than copying their rules,
   and it has `deevnet-log-user` render vmauth's users. A rule change in either package changes the
   Pi too; that is the point. It is not part of the deployed API.
 - **Images are pushed, not pulled.** The provisioning VM sits on Platform, which has no route back

@@ -38,7 +38,7 @@ const (
 // kitServices are the labels the kit's own services answer to. A Deevnet
 // certificate must name each of them, site-less, or a service on this Pi
 // would fail to verify another.
-var kitServices = []string{"mqtt", "logs", "grafana"}
+var kitServices = []string{"mqtt", "logs", "grafana", "metrics", "ntfy"}
 
 func (st state) deevnet() bool { return st.PKI == pkiDeevnet }
 
@@ -273,10 +273,17 @@ func (k *kit) certInstall(fullchainPath, rootPath string) error {
 // leaves them dialling a name the certificate does not hold (#41). The
 // dashboards unit waits for Grafana itself.
 func (k *kit) restartForCert() error {
+	// ntfy's URL is the phone's server, which moves with the names the Pi
+	// answers to.
+	if st, err := k.loadState(); err == nil && st.NotifyPassword != "" {
+		if err := k.writeNtfyEnv(st); err != nil {
+			return err
+		}
+	}
 	if k.noExec {
 		return nil
 	}
-	if err := runCmd("systemctl", "restart", "mosquitto", "vmauth", "grafana", "deevnet-log-bridge"); err != nil {
+	if err := runCmd("systemctl", "restart", "mosquitto", "vmauth", "grafana", "deevnet-log-bridge", "ntfy"); err != nil {
 		return err
 	}
 	return runCmd("systemctl", "restart", "deevnet-kit-dashboards")
