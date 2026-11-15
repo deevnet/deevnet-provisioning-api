@@ -186,7 +186,10 @@ func (k *kit) cmdRegenCerts() error {
 	}
 	// None of them re-reads its certificate on reload. Grafana presents it on
 	// 3000 too, and was left serving the old one until it was restarted.
-	return runCmd(append([]string{"systemctl", "restart"}, "mosquitto", "vmauth", "grafana", "ntfy")...)
+	if err := runCmd(append([]string{"systemctl", "restart"}, "mosquitto", "vmauth", "grafana", "ntfy")...); err != nil {
+		return err
+	}
+	return runCmd("systemctl", "try-restart", siloUnit)
 }
 
 func (k *kit) loadCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {

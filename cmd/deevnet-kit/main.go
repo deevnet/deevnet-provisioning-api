@@ -85,6 +85,16 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
   deevnet-kit alerts clear             remove every group; the phone's login stays
   deevnet-kit alerts sync              write the groups again (each boot)
   deevnet-kit notify                   what the phone's ntfy app needs: server, login, topics
+  deevnet-kit bucket add NAME --quota-gb N [--versioning] [--expire-days N]
+                    [--noncurrent-expire-days N] [--public-read] [--key-file FILE]
+                                       a bucket <tenant>-NAME, and its default write key;
+                                       --key-file keeps a key from your Terraform
+  deevnet-kit bucket list
+  deevnet-kit bucket rm NAME [--force]
+  deevnet-kit bucket key add BUCKET KEY --access read|write [--key-file FILE]
+  deevnet-kit bucket key list BUCKET
+  deevnet-kit bucket key rm BUCKET KEY
+                                       env and export take --bucket NAME[:KEY] for an app's key
   deevnet-kit selftest                 prove the card end to end: TLS, a device log over
                                        MQTT, an app log, and both read back through Grafana
 
@@ -135,6 +145,8 @@ func run(args []string) error {
 		return k.cmdAlerts(os.Stdout, args[1:])
 	case "notify":
 		return k.cmdNotify(os.Stdout)
+	case "bucket":
+		return k.cmdBucket(os.Stdout, args[1:])
 	case "selftest":
 		return k.cmdSelftest()
 	case "help", "-h", "--help":

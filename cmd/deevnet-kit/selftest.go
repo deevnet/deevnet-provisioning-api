@@ -194,6 +194,17 @@ func (k *kit) cmdSelftest() error {
 	)
 
 	checks = append(checks, k.selftestAlerting(st, hc, marker)...)
+	// The bucket store runs once a bucket exists (CHG-0073).
+	if bs, err := k.loadBuckets(); err == nil && len(bs) > 0 {
+		checks = append(checks, check{fmt.Sprintf("TLS bucket store :%d", s3Port), func() error {
+			c, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp",
+				fmt.Sprintf("127.0.0.1:%d", s3Port), &tls.Config{RootCAs: pool, ServerName: st.name("s3")})
+			if err != nil {
+				return err
+			}
+			return c.Close()
+		}})
+	}
 
 	fmt.Printf("deevnet-kit selftest - tenant %s (index %d)\n\n", st.Tenant, st.Index)
 	res := selftestResult{At: time.Now().UTC(), Failed: []string{}}
