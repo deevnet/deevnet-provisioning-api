@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/deevnet/deevnet-provisioning-api/internal/logauth"
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant"
 	"github.com/deevnet/deevnet-provisioning-api/internal/tenant/tenanttest"
 )
@@ -31,7 +32,7 @@ func testStore(t *testing.T) *Postgres {
 	}
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, tenant_runtime_secrets, tenant_secret_readers, tenant_bucket_keys, tenant_buckets, revoked_tenant_tokens, deleted_tenant_names, tenants, schema_migrations CASCADE`,
+		`DROP TABLE IF EXISTS audit_log, admission_keys, tenant_steps, tenant_workloads, tenant_wifi_keys, tenant_device_addresses, tenant_devices, tenant_broker_accounts, tenant_certificates, tenant_records, tenant_runtime_secrets, tenant_secret_readers, tenant_bucket_keys, tenant_buckets, tenant_alert_rule_groups, revoked_tenant_tokens, deleted_tenant_names, tenants, schema_migrations CASCADE`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatal(err)
@@ -501,7 +502,7 @@ func TestResealMovesEverySealedColumn(t *testing.T) {
 	ctx := context.Background()
 	p.WithSealer(keyedSealer{current: "old"})
 	secrets := tenant.Secrets{TSIG: "tsig", State: "state", LogIngest: "ingest", LogRead: "read",
-		DashboardPassword: "dash", APITokenHash: tenant.HashToken("t")}
+		DashboardPassword: "dash", NotifyPassword: "notify", APITokenHash: tenant.HashToken("t")}
 	if _, err := p.Create(ctx, "treseal", secrets, lowest); err != nil {
 		t.Fatal(err)
 	}
@@ -522,8 +523,8 @@ func TestResealMovesEverySealedColumn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(rep.Resealed); n != 5 || rep.Current != 1 || rep.Failed["tenants.dashboard_password"] != 1 {
-		t.Fatalf("report %+v, want 5 columns resealed, 1 current, the gone one failed", rep)
+	if n := len(rep.Resealed); n != 6 || rep.Current != 1 || rep.Failed["tenants.dashboard_password"] != 1 {
+		t.Fatalf("report %+v, want 6 columns resealed, 1 current, the gone one failed", rep)
 	}
 
 	var raw []string
@@ -532,6 +533,7 @@ func TestResealMovesEverySealedColumn(t *testing.T) {
 		`SELECT state_secret FROM tenants WHERE name = 'treseal'`,
 		`SELECT log_ingest_token FROM tenants WHERE name = 'treseal'`,
 		`SELECT log_read_token FROM tenants WHERE name = 'treseal'`,
+		`SELECT notify_password FROM tenants WHERE name = 'treseal'`,
 		`SELECT psk FROM admission_keys WHERE tenant = 'treseal'`,
 		`SELECT psk FROM tenant_wifi_keys WHERE tenant = 'treseal'`,
 	} {
@@ -565,5 +567,45 @@ func TestResealMovesEverySealedColumn(t *testing.T) {
 	// A second run moves nothing.
 	if rep, err := p.Reseal(ctx, ks); err != nil || len(rep.Resealed) != 0 {
 		t.Errorf("second run: %+v %v, want nothing resealed", rep, err)
+	}
+}
+
+func TestAlertRuleGroupsRoundTripAndCascade(t *testing.T) {
+	p := testStore(t)
+	ctx := context.Background()
+	if _, err := p.Create(ctx, "eds", tenant.Secrets{NotifyPassword: strings.Repeat("n", 48), APITokenHash: tenant.HashToken("t")}, lowest); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := p.Get(ctx, "eds")
+	if err != nil || rec.Secrets.NotifyPassword != strings.Repeat("n", 48) {
+		t.Fatalf("notify password did not round-trip: %v", err)
+	}
+	g := tenant.AlertRuleGroup{Tenant: "eds", Group: logauth.AlertGroup{
+		Name: "backend", Type: "metrics", Interval: "1m", Topic: "backend", Partition: "workloads",
+		Rules: []logauth.AlertRule{{Alert: "Q", Expr: `x > 1`, Labels: map[string]string{"severity": "page"},
+			Annotations: map[string]string{"summary": `it's "{{ $value }}"`}}},
+	}}
+	if _, err := p.PutAlertRuleGroup(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	g.Group.Rules[0].Expr = "x > 2"
+	if _, err := p.PutAlertRuleGroup(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.GetAlertRuleGroup(ctx, "eds", "backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Group.Rules[0].Expr != "x > 2" || got.Group.Rules[0].Annotations["summary"] != `it's "{{ $value }}"` {
+		t.Errorf("group = %+v", got.Group)
+	}
+	if _, err := p.PutAlertRuleGroup(ctx, tenant.AlertRuleGroup{Tenant: "nobody", Group: g.Group}); !errors.Is(err, tenant.ErrNotFound) {
+		t.Errorf("a group for no tenant: %v", err)
+	}
+	if err := p.Delete(ctx, "eds"); err != nil {
+		t.Fatal(err)
+	}
+	if gs, _ := p.ListAlertRuleGroups(ctx, "eds"); len(gs) != 0 {
+		t.Error("a removed tenant's groups survived it")
 	}
 }

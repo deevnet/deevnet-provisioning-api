@@ -36,6 +36,7 @@ type Store struct {
 	extraRecords   map[string]tenant.ExtraRecord
 	buckets        map[string]tenant.Bucket
 	bucketKeys     map[string]tenant.BucketKey
+	alertGroups    map[string]tenant.AlertRuleGroup
 	revoked        map[string]string
 	deletedNames   map[string]bool
 	AuditLog       []tenant.AuditEntry
@@ -450,6 +451,56 @@ func (s *Store) DeleteDevice(_ context.Context, tenantName, name string) error {
 	return nil
 }
 
+func (s *Store) PutAlertRuleGroup(_ context.Context, g tenant.AlertRuleGroup) (tenant.AlertRuleGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[g.Tenant]; !ok {
+		return tenant.AlertRuleGroup{}, tenant.ErrNotFound
+	}
+	if s.alertGroups == nil {
+		s.alertGroups = map[string]tenant.AlertRuleGroup{}
+	}
+	key := g.Tenant + "/" + g.Group.Name
+	if old, ok := s.alertGroups[key]; ok {
+		g.CreatedAt = old.CreatedAt
+	} else {
+		g.CreatedAt = time.Now()
+	}
+	g.UpdatedAt = time.Now()
+	s.alertGroups[key] = g
+	return g, nil
+}
+
+func (s *Store) GetAlertRuleGroup(_ context.Context, tenantName, name string) (tenant.AlertRuleGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.alertGroups[tenantName+"/"+name]
+	if !ok {
+		return tenant.AlertRuleGroup{}, tenant.ErrNotFound
+	}
+	return g, nil
+}
+
+func (s *Store) ListAlertRuleGroups(_ context.Context, tenantName string) ([]tenant.AlertRuleGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []tenant.AlertRuleGroup
+	for _, g := range s.alertGroups {
+		if g.Tenant == tenantName {
+			out = append(out, g)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Group.Name < out[j].Group.Name })
+	return out, nil
+}
+
+func (s *Store) DeleteAlertRuleGroup(_ context.Context, tenantName, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.alertGroups, tenantName+"/"+name)
+	return nil
+}
+
 // withMAC fills in the device's MAC, which the real store reads through a join.
 func (s *Store) withMAC(a tenant.DeviceAddress) tenant.DeviceAddress {
 	a.MAC = s.devices[a.Tenant+"/"+a.Device].MAC
@@ -712,6 +763,12 @@ type Backends struct {
 	// tenant's users are (ADR-0027). A test can assert the index and the two
 	// tokens really crossed.
 	LogTenants map[string]tenant.LogTenant
+	// Alerts is each tenant's alerting state as the writer last received it
+	// (CHG-0071). AlertsInvalid makes the writer refuse a tenant's rules, as
+	// vmalert's dry run does; AlertsErr makes it unreachable.
+	Alerts        map[string]tenant.AlertTenant
+	AlertsInvalid string
+	AlertsErr     error
 	// LogPurged is every "<name>:<index>" whose partitions were purged.
 	LogPurged []string
 	// LogErr, when set, is returned by every Put and Remove: the store being
@@ -758,6 +815,7 @@ func NewBackends() *Backends {
 		Foreign:        map[string]bool{},
 		BrokerAccounts: map[string]tenant.BrokerAccount{},
 		LogTenants:     map[string]tenant.LogTenant{},
+		Alerts:         map[string]tenant.AlertTenant{},
 		DashTenants:    map[string]tenant.DashTenant{},
 		DashOrgs:       map[string]int{},
 		Signer:         NewSigner(),
@@ -1118,6 +1176,28 @@ func (d *dashboards) Remove(_ context.Context, name string) error {
 
 type logWriter struct{ b *Backends }
 
+// Alerting returns a stand-in for the writer's alerting half (CHG-0071). Like
+// the real writer, it refuses a tenant whose users it does not hold.
+func (b *Backends) Alerting() tenant.Alerting { return &alertWriter{b} }
+
+type alertWriter struct{ b *Backends }
+
+func (w *alertWriter) PutAlerts(_ context.Context, t tenant.AlertTenant) error {
+	if w.b.AlertsErr != nil {
+		return w.b.AlertsErr
+	}
+	if w.b.AlertsInvalid != "" {
+		return &tenant.InvalidError{Reason: w.b.AlertsInvalid}
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	if u, ok := w.b.LogTenants[t.Name]; !ok || u.Index != t.Index {
+		return fmt.Errorf("the tenant has no users on this store")
+	}
+	w.b.Alerts[t.Name] = t
+	return nil
+}
+
 // LogWriter returns a stand-in for the program on the observability store.
 func (b *Backends) LogWriter() tenant.LogWriter { return &logWriter{b} }
 
@@ -1154,6 +1234,8 @@ func (w *logWriter) Remove(_ context.Context, name string, _ int) error {
 	w.b.mu.Lock()
 	defer w.b.mu.Unlock()
 	delete(w.b.LogTenants, name)
+	// The real writer's delete takes the tenant's alerting with its users.
+	delete(w.b.Alerts, name)
 	return nil
 }
 

@@ -95,7 +95,10 @@ func (p *Postgres) seal(ctx context.Context, s tenant.Secrets) (tenant.Secrets, 
 	if s.LogRead, err = p.sealer.Seal(ctx, s.LogRead); err != nil {
 		return s, err
 	}
-	s.DashboardPassword, err = p.sealer.Seal(ctx, s.DashboardPassword)
+	if s.DashboardPassword, err = p.sealer.Seal(ctx, s.DashboardPassword); err != nil {
+		return s, err
+	}
+	s.NotifyPassword, err = p.sealer.Seal(ctx, s.NotifyPassword)
 	return s, err
 }
 
@@ -135,6 +138,10 @@ func (p *Postgres) open(ctx context.Context, s tenant.Secrets) (tenant.Secrets, 
 	}
 	// The same for the dashboard password: re-minted, never asked for.
 	if s.DashboardPassword, _, err = p.openOne(ctx, s.DashboardPassword, "dashboard-password"); err != nil {
+		return tenant.Secrets{}, err
+	}
+	// And the ntfy login (CHG-0071).
+	if s.NotifyPassword, _, err = p.openOne(ctx, s.NotifyPassword, "notify-password"); err != nil {
 		return tenant.Secrets{}, err
 	}
 	return s, nil
@@ -214,13 +221,13 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 	return nil
 }
 
-const tenantColumns = `name, idx, status, tsig_secret, state_secret, api_token_hash, log_ingest_token, log_read_token, dashboard_password, state_secret_reissued, dashboard_org, created_at, updated_at`
+const tenantColumns = `name, idx, status, tsig_secret, state_secret, api_token_hash, log_ingest_token, log_read_token, dashboard_password, notify_password, state_secret_reissued, dashboard_org, created_at, updated_at`
 
 func scanTenant(row pgx.Row) (tenant.Record, error) {
 	var r tenant.Record
 	var status string
 	err := row.Scan(&r.Name, &r.Index, &status, &r.Secrets.TSIG, &r.Secrets.State, &r.Secrets.APITokenHash,
-		&r.Secrets.LogIngest, &r.Secrets.LogRead, &r.Secrets.DashboardPassword, &r.Secrets.StateReissued, &r.DashboardOrg,
+		&r.Secrets.LogIngest, &r.Secrets.LogRead, &r.Secrets.DashboardPassword, &r.Secrets.NotifyPassword, &r.Secrets.StateReissued, &r.DashboardOrg,
 		&r.CreatedAt, &r.UpdatedAt)
 	r.Status = tenant.Status(status)
 	return r, err
@@ -301,11 +308,11 @@ func (p *Postgres) Create(ctx context.Context, name string, secrets tenant.Secre
 		}
 		rec, err = scanTenant(tx.QueryRow(ctx,
 			`INSERT INTO tenants (name, idx, status, tsig_secret, state_secret, api_token_hash,
-			                      log_ingest_token, log_read_token, dashboard_password)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			                      log_ingest_token, log_read_token, dashboard_password, notify_password)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			 RETURNING `+tenantColumns,
 			name, n, string(tenant.StatusProvisioning), sealed.TSIG, sealed.State, sealed.APITokenHash,
-			sealed.LogIngest, sealed.LogRead, sealed.DashboardPassword))
+			sealed.LogIngest, sealed.LogRead, sealed.DashboardPassword, sealed.NotifyPassword))
 		rec.Secrets = secrets
 		return err
 	})
@@ -328,9 +335,9 @@ func (p *Postgres) SetSecrets(ctx context.Context, name string, s tenant.Secrets
 	return p.execOne(ctx,
 		`UPDATE tenants SET tsig_secret = $2, state_secret = $3, api_token_hash = $4,
 		                    log_ingest_token = $5, log_read_token = $6, dashboard_password = $7,
-		                    state_secret_reissued = $8, updated_at = now()
+		                    state_secret_reissued = $8, notify_password = $9, updated_at = now()
 		  WHERE name = $1`,
-		name, s.TSIG, s.State, s.APITokenHash, s.LogIngest, s.LogRead, s.DashboardPassword, s.StateReissued)
+		name, s.TSIG, s.State, s.APITokenHash, s.LogIngest, s.LogRead, s.DashboardPassword, s.StateReissued, s.NotifyPassword)
 }
 
 func (p *Postgres) SetDashboardOrg(ctx context.Context, name string, orgID int) error {

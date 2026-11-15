@@ -40,12 +40,20 @@ const (
 	// it runs, and the writer refuses it while any tenant's users still name
 	// the index.
 	OpPurge = "purge"
+	// OpAlerts replaces the tenant's whole alerting state: its ntfy login and
+	// every rule group (ADR-0023 §5, CHG-0071). It is sent after OpPut, since
+	// the tenant's vmalert reads with the read token the put wrote. OpDelete
+	// removes the alerting state with the users.
+	OpAlerts = "alerts"
 )
 
 // Bounds. The writer reads from a network peer, so every field is bounded.
 const (
-	// MaxRequestBytes caps what the writer will read from stdin at all.
-	MaxRequestBytes = 64 << 10
+	// MaxRequestBytes caps what the writer will read from stdin at all. A
+	// tenant's rule groups are the largest request, bounded by MaxRulesPerTenant
+	// and the per-field limits in alerts.go; the API refuses a set whose
+	// encoding is larger than this before sending it.
+	MaxRequestBytes = 1 << 20
 
 	maxTenant = 8 // ADR-0002: a tenant name is a PVE SDN zone id
 
@@ -75,6 +83,9 @@ type Request struct {
 	IngestToken string `json:"ingest_token,omitempty"`
 	// ReadToken reads the tenant's partitions. Empty for a delete.
 	ReadToken string `json:"read_token,omitempty"`
+
+	// Alerts is the tenant's alerting state, on an OpAlerts only.
+	Alerts *Alerts `json:"alerts,omitempty"`
 }
 
 // Response is the single answer. The writer prints exactly one of these and
@@ -88,6 +99,12 @@ type Response struct {
 	// retry distinguishable from a first write in the audit trail without
 	// changing the outcome.
 	Existed bool `json:"existed,omitempty"`
+
+	// Invalid marks a refusal of the tenant's own input that the API could not
+	// check itself: a rule expression or template vmalert will not load. The
+	// message is vmalert's, about the tenant's own text, and goes back to the
+	// tenant as a 400.
+	Invalid bool `json:"invalid,omitempty"`
 }
 
 var (
@@ -153,7 +170,7 @@ func (r Request) Validate() error {
 		return fmt.Errorf("unsupported version %d, this writer speaks %d", r.Version, Version)
 	}
 	switch r.Op {
-	case OpPut, OpDelete, OpPurge:
+	case OpPut, OpDelete, OpPurge, OpAlerts:
 	default:
 		return fmt.Errorf("unknown op %q", r.Op)
 	}
@@ -162,6 +179,18 @@ func (r Request) Validate() error {
 	}
 	if r.Index < 1 || r.Index > MaxIndex {
 		return fmt.Errorf("index %d is outside 1..%d; 0 is the substrate partition and is never a tenant", r.Index, MaxIndex)
+	}
+	if r.Op == OpAlerts {
+		if r.IngestToken != "" || r.ReadToken != "" {
+			return fmt.Errorf("an alerts request carries no tokens; the writer reads the read token the put wrote")
+		}
+		if r.Alerts == nil {
+			return fmt.Errorf("an alerts request carries the tenant's alerting state")
+		}
+		return r.Alerts.Validate()
+	}
+	if r.Alerts != nil {
+		return fmt.Errorf("a %s carries no alerting state", r.Op)
 	}
 	if r.Op == OpDelete || r.Op == OpPurge {
 		// A delete carries identity only. Tokens on a delete would mean the

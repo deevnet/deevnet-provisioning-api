@@ -150,6 +150,11 @@ type Site struct {
 	// Optional in the same way: empty, and the tenant is told no endpoint.
 	MetricsEndpoint string
 
+	// The ntfy server tenants' phones subscribe to for their alerts (ADR-0023
+	// §5, CHG-0071). Optional in the same way: empty, and the site offers no
+	// alerting - no login is issued and the rule-group routes refuse.
+	NotifyEndpoint string
+
 	// The dashboard server tenants log in to (ADR-0024). Optional in the same
 	// way: a site without one gives the tenant no dashboard block.
 	DashboardURL string

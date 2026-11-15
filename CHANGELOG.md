@@ -8,6 +8,37 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+### Added
+
+- **Tenant alerting** (ADR-0023 step B, CHG-0071), an optional service. Where the site sets
+  `DEEVNET_NOTIFY_ENDPOINT`, a tenant declares alert rule groups over its metrics or its logs, and
+  each group's alerts reach its ntfy topic `<tenant>-<topic>`.
+  - `PUT`, `GET` and `DELETE /v1/tenants/{name}/alert-rule-groups/{group}`, and `GET` of the list.
+    A group is written to the observability store, where vmalert dry-runs it, before it is
+    recorded: a rule vmalert won't load is a `400` naming the group, the rule and the parse error.
+  - Refused with `400`: a rule label `tenant`, `deevnet_topic` or `alertname` (vmalert lets a
+    rule's labels beat its `-external.label`, and Alertmanager routes on the first two), a name
+    starting `__`, a `devices` partition on a metrics group, an interval outside 30s to 1h, and
+    more than 50 rules a group, 20 groups or 200 rules a tenant.
+  - The tenant view gains a `notify` block: `endpoint`, `username`, `topic_prefix`, and the
+    `password` on create, restore and reconcile, like the dashboard password. A new `alerting`
+    step mints it and writes the tenant's whole alerting state; reconcile rewrites it into a
+    rebuilt store.
+  - `deevnet-log-user` gains an `alerts` operation and an optional `alerting` block in its config.
+    From every tenant's state it renders each tenant's vmalert directory (rules, read token,
+    port), Alertmanager's routes, reloaded over loopback, and ntfy's declared users, which keep
+    only a bcrypt hash. It touches `changed_file` for a root path unit on the host to start,
+    reload or stop each tenant's vmalert and restart ntfy. A delete takes the tenant's alerting
+    with its users.
+
+### Upgrading
+
+- Migration `0016` adds `tenants.notify_password` and `tenant_alert_rule_groups`.
+- Deploy `deevnet-log-user` before setting `DEEVNET_NOTIFY_ENDPOINT`: an old writer refuses the
+  `alerts` operation. Its `alerting` config block is optional; without it the writer renders and
+  purges exactly as before, and refuses an `alerts` request.
+- `DEEVNET_NOTIFY_ENDPOINT` is optional. Unset, the API behaves as 0.24.0.
+
 ## 0.24.0 (2026-11-14)
 
 ### Changed
