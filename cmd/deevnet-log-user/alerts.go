@@ -395,7 +395,13 @@ func regenerateAlerting(ctx context.Context, cfg config, users []tenantFile, noR
 		}
 	}
 	if amChanged && !noReload {
-		return reloadAlertmanager(ctx, a.AlertmanagerReloadURL)
+		err := reloadAlertmanager(ctx, a.AlertmanagerReloadURL)
+		var down *alertmanagerDown
+		if errors.As(err, &down) && cfg.renderMode {
+			fmt.Fprintln(os.Stderr, "Alertmanager is not running; it reads the new configuration when it starts:", err)
+			return nil
+		}
+		return err
 	}
 	return nil
 }
@@ -554,7 +560,9 @@ func renderVMAlertDirs(a *alertingConfig, live []alertsFile, users map[string]te
 		}{
 			{"rules.yml", append(doc, '\n'), 0o640},
 			// The read token: the tenant's vmalert queries as the tenant.
-			{"token", []byte(users[s.Tenant].ReadToken + "\n"), 0o600},
+			// Group-readable: vmalert runs as its own user in this
+			// program's group, not as root.
+			{"token", []byte(users[s.Tenant].ReadToken + "\n"), 0o640},
 			{"vmalert.env", []byte("VMALERT_PORT=" + strconv.Itoa(a.PortBase+s.Index) + "\n"), 0o640},
 		}
 		for _, f := range files {
@@ -604,6 +612,13 @@ func writeIfChanged(path string, body []byte, mode os.FileMode) (bool, error) {
 	return true, nil
 }
 
+// alertmanagerDown is an Alertmanager that did not answer at all, as opposed
+// to one that answered and refused the configuration.
+type alertmanagerDown struct{ err error }
+
+func (e *alertmanagerDown) Error() string { return "asking Alertmanager to reload: " + e.err.Error() }
+func (e *alertmanagerDown) Unwrap() error { return e.err }
+
 // reloadAlertmanager asks Alertmanager to re-read its configuration. A
 // configuration it refuses leaves it running the previous one, and the
 // refusal is this request's failure.
@@ -614,7 +629,7 @@ func reloadAlertmanager(ctx context.Context, url string) error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("asking Alertmanager to reload: %w", err)
+		return &alertmanagerDown{err}
 	}
 	defer resp.Body.Close()
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))

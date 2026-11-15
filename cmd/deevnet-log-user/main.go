@@ -84,6 +84,11 @@ type config struct {
 	// Alerting is the tenants' alerting on this host (ADR-0023 §5, CHG-0071).
 	// Absent: no alerting, and an alerts request is refused.
 	Alerting *alertingConfig `json:"alerting,omitempty"`
+
+	// renderMode is Ansible's --render, set at run time and never read from
+	// the file: there, an Alertmanager that is not running yet is not a
+	// failure, because it reads its configuration when it starts.
+	renderMode bool
 }
 
 // base is the half of the configuration the substrate owns.
@@ -178,6 +183,7 @@ func renderOnly(noReload bool) error {
 	if err != nil {
 		return err
 	}
+	cfg.renderMode = true
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout())
 	defer cancel()
 	return regenerate(ctx, cfg, noReload)

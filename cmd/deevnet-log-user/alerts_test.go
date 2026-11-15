@@ -378,3 +378,19 @@ func TestTheRealVMAlertLoadsTheRenderedRules(t *testing.T) {
 		t.Logf("%s: %s", name, bad.msg)
 	}
 }
+
+// Ansible renders before Alertmanager has started on a first deploy; the API
+// must hear about an Alertmanager that is down.
+func TestAnAlertmanagerNotYetRunningFailsOnlyARequest(t *testing.T) {
+	e := newAlertsEnv(t, user("eds", 2))
+	e.cfg.Alerting.AlertmanagerReloadURL = "http://127.0.0.1:1/-/reload"
+	if err := e.apply(t, alertsReq("eds", 2, group("a", "metrics", "x", "workloads", "x > 1"))); err == nil {
+		t.Fatal("a request succeeded with Alertmanager down")
+	}
+	_ = os.Remove(e.cfg.Alerting.AlertmanagerFile)
+	e.cfg.renderMode = true
+	users, _ := loadTenants(e.cfg.UsersDir)
+	if err := regenerateAlerting(context.Background(), e.cfg, users, false); err != nil {
+		t.Fatalf("a render failed with Alertmanager down: %v", err)
+	}
+}
