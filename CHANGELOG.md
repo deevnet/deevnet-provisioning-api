@@ -8,6 +8,8 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.25.0 (2026-11-15)
+
 ### Added
 
 - **Tenant alerting** (ADR-0023 step B, CHG-0071), an optional service. Where the site sets
