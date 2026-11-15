@@ -81,6 +81,9 @@ type config struct {
 	// a network peer can reach.
 	MetricsDeleteURL     string `json:"metrics_delete_url,omitempty"`
 	MetricsDeleteKeyFile string `json:"metrics_delete_key_file,omitempty"`
+	// Alerting is the tenants' alerting on this host (ADR-0023 §5, CHG-0071).
+	// Absent: no alerting, and an alerts request is refused.
+	Alerting *alertingConfig `json:"alerting,omitempty"`
 }
 
 // base is the half of the configuration the substrate owns.
@@ -223,6 +226,35 @@ func run() logauth.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout())
 	defer cancel()
 
+	if req.Op == logauth.OpAlerts {
+		// A dry run of the tenant's rules comes before anything is kept, so
+		// this one gets a longer bound than a users change.
+		actx, acancel := context.WithTimeout(context.Background(), cfg.timeout()+20*time.Second)
+		defer acancel()
+		var bad *invalidRules
+		switch err := putAlerts(actx, cfg, req); {
+		case errors.As(err, &bad):
+			fmt.Fprintln(os.Stderr, "refusing the tenant's rules:", err)
+			resp.Message, resp.Invalid = bad.msg, true
+			return resp
+		case errors.Is(err, errNoAlerting), errors.Is(err, errNoUsers):
+			fmt.Fprintln(os.Stderr, "alerts:", err)
+			resp.Message = err.Error()
+			return resp
+		case err != nil:
+			fmt.Fprintln(os.Stderr, "writing alerts:", err)
+			resp.Message = "the tenant's alerting could not be written"
+			return resp
+		}
+		if err := regenerate(actx, cfg, false); err != nil {
+			fmt.Fprintln(os.Stderr, "regenerating:", err)
+			resp.Message = "the store's configuration could not be regenerated"
+			return resp
+		}
+		resp.OK = true
+		return resp
+	}
+
 	path := filepath.Join(cfg.UsersDir, req.Tenant+".json")
 	existed := fileExists(path)
 
@@ -248,6 +280,13 @@ func run() logauth.Response {
 			return resp
 		}
 	case logauth.OpDelete:
+		// The alerting state first: its vmalert reads as the user removed
+		// next, and its phone login goes with it.
+		if err := removeAlerts(cfg, req.Tenant); err != nil {
+			fmt.Fprintln(os.Stderr, "removing alerts file:", err)
+			resp.Message = "the tenant's alerting could not be removed"
+			return resp
+		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintln(os.Stderr, "removing tenant file:", err)
 			resp.Message = "the tenant's users could not be removed"
@@ -287,10 +326,13 @@ func regenerate(ctx context.Context, cfg config, noReload bool) error {
 	if err := writeFile(cfg.AuthFile, doc, 0o640); err != nil {
 		return fmt.Errorf("writing %s: %w", cfg.AuthFile, err)
 	}
-	if noReload {
-		return nil
+	if !noReload {
+		if err := reload(ctx, cfg.ReloadURL); err != nil {
+			return err
+		}
 	}
-	return reload(ctx, cfg.ReloadURL)
+	// After vmauth: a tenant's vmalert queries through the users just loaded.
+	return regenerateAlerting(ctx, cfg, tenants, noReload)
 }
 
 // render builds the whole vmauth configuration.
@@ -514,6 +556,9 @@ func loadConfig() (config, error) {
 	}
 	if cfg.Base == "" || cfg.UsersDir == "" || cfg.AuthFile == "" || cfg.ReloadURL == "" {
 		return config{}, errors.New("base, users_dir, auth_file and reload_url are all required")
+	}
+	if err := cfg.Alerting.validate(); err != nil {
+		return config{}, err
 	}
 	return cfg, nil
 }

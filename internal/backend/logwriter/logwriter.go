@@ -118,6 +118,17 @@ func (c *Client) Purge(ctx context.Context, name string, index int) error {
 	})
 }
 
+// PutAlerts writes a tenant's whole alerting state (ADR-0023 §5, CHG-0071).
+// The writer has vmalert dry-run the rules first, so this waits longer than a
+// users change; a refusal of the tenant's own rules is a tenant.InvalidError.
+func (c *Client) PutAlerts(ctx context.Context, t tenant.AlertTenant) error {
+	return c.sendWithin(ctx, c.cfg.SessionTimeout+20*time.Second, logauth.Request{
+		Version: logauth.Version, Op: logauth.OpAlerts,
+		Tenant: t.Name, Index: t.Index,
+		Alerts: &logauth.Alerts{NotifyPassword: t.NotifyPassword, Groups: t.Groups},
+	})
+}
+
 func (c *Client) send(ctx context.Context, req logauth.Request) error {
 	return c.sendWithin(ctx, c.cfg.SessionTimeout, req)
 }
@@ -161,6 +172,10 @@ func (c *Client) sendWithin(ctx context.Context, timeout time.Duration, req loga
 	switch {
 	case decodeErr == nil && resp.OK:
 		return nil
+	case decodeErr == nil && !resp.OK && resp.Invalid:
+		// vmalert refusing the tenant's own rule text: the tenant's to fix,
+		// and the message is about its own text only.
+		return &tenant.InvalidError{Reason: resp.Message}
 	case decodeErr == nil && !resp.OK:
 		return fmt.Errorf("the writer refused a request the API had already validated (%s); the two ends disagree about what is valid", resp.Message)
 	case runErr != nil:

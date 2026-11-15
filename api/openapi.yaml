@@ -54,6 +54,12 @@ tags:
     description: |
       A tenant's registry of its own edge devices. An entry is identity, not authorization:
       registering a device grants it nothing.
+  - name: Alerting
+    description: |
+      A tenant's alert rule groups, over its metrics or its logs. Each group's rules run in the
+      tenant's own vmalert, reading with the tenant's log read token, and its alerts reach the
+      ntfy topic `<tenant>-<topic>`, which the tenant's phone reads with the `notify` login.
+      Optional: a site with no alerting answers `400`.
   - name: Device addresses
     description: A fixed address for a registered device on its trust class's network.
   - name: Wi-Fi keys
@@ -698,6 +704,120 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/alert-rule-groups:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+    get:
+      tags: [Alerting]
+      operationId: listAlertRuleGroups
+      summary: List a tenant's alert rule groups
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The groups, by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alert_rule_groups]
+                properties:
+                  alert_rule_groups:
+                    type: array
+                    items: { $ref: "#/components/schemas/AlertRuleGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+  /v1/tenants/{name}/alert-rule-groups/{group}:
+    parameters:
+      - $ref: "#/components/parameters/tenant"
+      - $ref: "#/components/parameters/group"
+    put:
+      tags: [Alerting]
+      operationId: putAlertRuleGroup
+      summary: Create or replace an alert rule group
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        The group is replaced whole. It is written to the observability store, and vmalert checks
+        every expression there, before the API records it: a group vmalert will not load is a
+        `400` naming the group, the rule and the parse error, and is not stored.
+
+        Refused with `400`:
+        - a label `tenant`, `deevnet_topic` or `alertname`, or any name starting `__`. The
+          platform sets these, and Alertmanager routes on the first two;
+        - a `devices` partition on a `metrics` group;
+        - an interval under 30 seconds or over an hour;
+        - more than 50 rules in a group, 20 groups, or 200 rules across a tenant's groups.
+
+        There are no recording rules: a tenant's vmalert only reads.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlertRuleGroupRequest" }
+            example:
+              type: metrics
+              topic: backend
+              rules:
+                - alert: QueueBacklog
+                  expr: backend_queue_depth > 100
+                  for: 5m
+                  labels: { severity: page }
+                  annotations: { summary: "Queue is {{ $value }}" }
+      responses:
+        "200":
+          description: The group, as recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertRuleGroup" }
+        "400":
+          description: |
+            Invalid group, a site with no alerting, or a tenant with no alerting login yet
+            (reconcile it).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TenantNotFound" }
+        "502":
+          description: The observability store did not take the group. Nothing was recorded; retry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    get:
+      tags: [Alerting]
+      operationId: getAlertRuleGroup
+      summary: Read an alert rule group
+      description: "**Callers:** operator, or the tenant itself."
+      responses:
+        "200":
+          description: The group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertRuleGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotMigrated" }
+    delete:
+      tags: [Alerting]
+      operationId: deleteAlertRuleGroup
+      summary: Delete an alert rule group
+      description: |
+        **Callers:** operator, or the tenant itself.
+
+        Its rules stop running before the group is removed from the registry. When it was the
+        tenant's last group, the tenant's vmalert stops.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502":
+          description: The observability store did not take the change. The group is still recorded; retry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "503": { $ref: "#/components/responses/NotMigrated" }
   /v1/tenants/{name}/devices/{device}/address:
     parameters:
@@ -1670,6 +1790,13 @@ components:
       description: The bucket's short name, as the tenant declared it, not `<tenant>-<name>`.
       schema: { type: string }
       example: media
+    group:
+      name: group
+      in: path
+      required: true
+      description: The rule group's name, 1-32 lowercase letters, digits or dashes.
+      schema: { type: string, pattern: "^[a-z][a-z0-9-]{0,31}$" }
+      example: backend
     device:
       name: device
       in: path
@@ -1925,17 +2052,80 @@ components:
         org_id: { type: integer }
         username: { type: string }
         password: { type: string, description: Create and reconcile responses only. }
+    TenantNotify:
+      type: object
+      description: |
+        The tenant's ntfy login, for its phone: it reads the topics starting `topic_prefix`, and
+        publishes nowhere. Empty at a site with no alerting, and until the alerting step has
+        issued it.
+      properties:
+        endpoint: { type: string }
+        username: { type: string }
+        password: { type: string, description: Create and reconcile responses only. }
+        topic_prefix: { type: string, description: "`<tenant>-`: a group's alerts go to `<tenant>-<topic>`." }
+    AlertRule:
+      type: object
+      required: [alert, expr]
+      additionalProperties: false
+      properties:
+        alert: { type: string, pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$" }
+        expr:
+          type: string
+          maxLength: 4096
+          description: MetricsQL for a `metrics` group, LogsQL with a `stats` pipe for a `logs` group.
+        for: { type: string, description: "How long the expression must hold before the alert fires, such as `5m`." }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+          description: At most 16. Not `tenant`, `deevnet_topic`, `alertname`, or a name starting `__`.
+        annotations:
+          type: object
+          additionalProperties: { type: string }
+          description: At most 16, each up to 4096 characters. vmalert templates are allowed.
+    AlertRuleGroupRequest:
+      type: object
+      required: [type, topic, rules]
+      additionalProperties: false
+      properties:
+        type: { type: string, enum: [metrics, logs] }
+        interval: { type: string, description: "30s to 1h. Default `1m`." }
+        topic: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,31}$", description: "Alerts go to the ntfy topic `<tenant>-<topic>`." }
+        partition:
+          type: string
+          enum: [workloads, platform, devices]
+          description: Which of the tenant's partitions the rules read. Default `workloads`; `devices` for a `logs` group only.
+        rules:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: "#/components/schemas/AlertRule" }
+    AlertRuleGroup:
+      type: object
+      required: [tenant, name, type, interval, topic, ntfy_topic, partition, rules, created_at, updated_at]
+      properties:
+        tenant: { type: string }
+        name: { type: string }
+        type: { type: string }
+        interval: { type: string }
+        topic: { type: string }
+        ntfy_topic: { type: string, description: "`<tenant>-<topic>`, the topic a phone subscribes to." }
+        partition: { type: string }
+        rules:
+          type: array
+          items: { $ref: "#/components/schemas/AlertRule" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     TenantStep:
       type: object
       description: One backend step's outcome. The error text is never returned; it is in the log.
       required: [name, ok, updated_at]
       properties:
-        name: { type: string, examples: [dns, resolver, state, network, device-address, log-store, dashboards] }
+        name: { type: string, examples: [dns, resolver, state, network, device-address, log-store, dashboards, alerting] }
         ok: { type: boolean }
         updated_at: { type: string, format: date-time }
     Tenant:
       type: object
-      required: [name, index, status, created_at, updated_at, network, fabric, dns, state, log, dashboard, secrets_stored, steps]
+      required: [name, index, status, created_at, updated_at, network, fabric, dns, state, log, dashboard, notify, secrets_stored, steps]
       properties:
         name: { type: string }
         index: { type: integer, description: The tenant index every identifier derives from. }
@@ -1952,6 +2142,7 @@ components:
         state: { $ref: "#/components/schemas/TenantState" }
         log: { $ref: "#/components/schemas/TenantLog" }
         dashboard: { $ref: "#/components/schemas/TenantDashboard" }
+        notify: { $ref: "#/components/schemas/TenantNotify" }
         api_token:
           type: string
           description: The tenant's own token. Present when this call generated or received one.

@@ -58,9 +58,12 @@ type Issued struct {
 	// DashboardPassword is the tenant's dashboard login (ADR-0024). Readable
 	// afterwards for the same reason as the log tokens, so reconcile returns it.
 	DashboardPassword string
-	TSIGSecret        string
-	StateSecret       string
-	APIToken          string
+	// NotifyPassword is the tenant's ntfy login (CHG-0071), readable
+	// afterwards like the dashboard password.
+	NotifyPassword string
+	TSIGSecret     string
+	StateSecret    string
+	APIToken       string
 }
 
 // Result is a tenant after a create, restore, resume or reconcile.
@@ -102,6 +105,10 @@ type Service struct {
 	// Dashboards maintains each tenant's organisation in the dashboard server
 	// (ADR-0024, CHG-0024). Nil when the site has none.
 	Dashboards Dashboards
+	// Alerting is the log store's writer, as it carries each tenant's alert
+	// rules and ntfy login (ADR-0023 §5, CHG-0071). Nil, or a site with no
+	// NotifyEndpoint, and the rule-group routes refuse with a reason.
+	Alerting Alerting
 	// Signer has the site's Tenant Service CA sign a tenant's request for a
 	// server certificate (ADR-0037). Nil at a site with no such CA, where the
 	// certificate routes refuse with a reason.
@@ -306,6 +313,7 @@ func (s *Service) createNew(ctx context.Context, req CreateRequest) (Result, err
 
 	rec, err = s.ensure(ctx, rec)
 	issued.DashboardPassword = rec.Secrets.DashboardPassword
+	issued.NotifyPassword = rec.Secrets.NotifyPassword
 	return Result{Record: rec, Outcome: outcome, Issued: issued}, err
 }
 
@@ -362,6 +370,7 @@ func (s *Service) restoreExisting(ctx context.Context, rec Record, req CreateReq
 	issued.DashboardPassword = rec.Secrets.DashboardPassword
 	issued.LogIngestToken = rec.Secrets.LogIngest
 	issued.LogReadToken = rec.Secrets.LogRead
+	issued.NotifyPassword = rec.Secrets.NotifyPassword
 	return Result{Record: rec, Outcome: outcome, Issued: issued}, err
 }
 
@@ -385,7 +394,7 @@ func (s *Service) Reconcile(ctx context.Context, name string) (Result, error) {
 		// dashboard server existed is handed them.
 		Issued: Issued{TSIGSecret: rec.Secrets.TSIG, StateSecret: rec.Secrets.State,
 			LogIngestToken: rec.Secrets.LogIngest, LogReadToken: rec.Secrets.LogRead,
-			DashboardPassword: rec.Secrets.DashboardPassword},
+			DashboardPassword: rec.Secrets.DashboardPassword, NotifyPassword: rec.Secrets.NotifyPassword},
 	}, err
 }
 
@@ -925,6 +934,17 @@ func (s *Service) ensure(ctx context.Context, rec Record) (Record, error) {
 			name string
 			run  func() error
 		}{StepDashboard, func() error { return s.ensureDashboards(ctx, s.reload(ctx, rec)) }})
+	}
+	// The tenant's alerting (CHG-0071), after the log store step: the
+	// writer refuses alerts for a tenant whose users it does not hold, and the
+	// tenant's vmalert reads with the read token that step wrote. Removal
+	// needs no step of its own: the log store step's removal takes the
+	// alerting state with the users.
+	if s.Alerting != nil && s.Site.NotifyEndpoint != "" {
+		steps = append(steps, struct {
+			name string
+			run  func() error
+		}{StepAlerting, func() error { return s.ensureAlerting(ctx, s.reload(ctx, rec)) }})
 	}
 	// The tenant's secrets namespace (ADR-0021, CHG-0067), at a site that
 	// offers it. On a reconcile after OpenBao lost it, this makes it again,

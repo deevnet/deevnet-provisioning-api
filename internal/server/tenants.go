@@ -26,6 +26,7 @@ func tenantRoutes(mux *http.ServeMux, svc *tenant.Service, logger *slog.Logger) 
 	workloadRoutes(mux, h)
 	wifiKeyRoutes(mux, h)
 	deviceRoutes(mux, h)
+	alertRuleGroupRoutes(mux, h)
 	addressRoutes(mux, h)
 	brokerAccountRoutes(mux, h)
 	certificateRoutes(mux, h)
@@ -179,6 +180,17 @@ type dashboardView struct {
 	Password string `json:"password,omitempty"`
 }
 
+// notifyView is the tenant's ntfy login, for its phone (ADR-0023 §5,
+// CHG-0071). It reads <tenant>-* and publishes nowhere. The password appears
+// only when issued, like the dashboard password. Absent at a site with no
+// alerting.
+type notifyView struct {
+	Endpoint    string `json:"endpoint,omitempty"`
+	Username    string `json:"username,omitempty"`
+	Password    string `json:"password,omitempty"`
+	TopicPrefix string `json:"topic_prefix,omitempty"`
+}
+
 // stepView leaves out the step's error text: it can name backend hosts, and it
 // is in the log and the database for the operator who needs it.
 type stepView struct {
@@ -200,6 +212,7 @@ type tenantView struct {
 	State     stateView     `json:"state"`
 	Log       logView       `json:"log"`
 	Dashboard dashboardView `json:"dashboard"`
+	Notify    notifyView    `json:"notify"`
 	APIToken  string        `json:"api_token,omitempty"`
 	// SecretsStored is false when the API holds secrets for this tenant that it
 	// can no longer read - a rebuilt or rotated Transit key (ADR-0016 §6). The
@@ -255,6 +268,14 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 			}
 			return dashboardView{URL: site.DashboardURL, OrgID: rec.DashboardOrg, Username: rec.Name}
 		}(),
+		// Told once the login exists: before the alerting step has run there
+		// is no ntfy user to name.
+		Notify: func() notifyView {
+			if site.NotifyEndpoint == "" || rec.Secrets.NotifyPassword == "" {
+				return notifyView{}
+			}
+			return notifyView{Endpoint: site.NotifyEndpoint, Username: rec.Name, TopicPrefix: rec.Name + "-"}
+		}(),
 		Steps: []stepView{},
 	}
 	if issued != nil {
@@ -265,6 +286,9 @@ func (h *tenantHandlers) view(rec tenant.Record, outcome tenant.Outcome, issued 
 		v.Log.ReadToken = issued.LogReadToken
 		if v.Dashboard.Username != "" {
 			v.Dashboard.Password = issued.DashboardPassword
+		}
+		if v.Notify.Username != "" {
+			v.Notify.Password = issued.NotifyPassword
 		}
 	}
 	for _, s := range rec.Steps {

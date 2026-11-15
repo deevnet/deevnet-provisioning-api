@@ -105,6 +105,10 @@ type Secrets struct {
 	// usable for the same reason as the log tokens: the server is told what it
 	// is, so an unreadable one is re-minted rather than asked for.
 	DashboardPassword string
+	// NotifyPassword is the tenant's ntfy login (ADR-0023 §5, CHG-0071), kept
+	// usable for the same reason: ntfy is told what it is (as a hash, by the
+	// log store's writer), so an unreadable one is re-minted.
+	NotifyPassword string
 	// StateReissued is set by an operator's reissue of State, and cleared once
 	// the tenant supplies that secret itself. While it is set, the tenant's
 	// own copy is older than the registry's, so a restore keeps this one.
@@ -325,6 +329,13 @@ type Store interface {
 	GetDevice(ctx context.Context, tenantName, name string) (Device, error)
 	ListDevices(ctx context.Context, tenantName string) ([]Device, error)
 	DeleteDevice(ctx context.Context, tenantName, name string) error
+
+	// Alert rule groups (ADR-0023 §5, CHG-0071). Nothing allocated, nothing
+	// sealed: a group is the tenant's own text.
+	PutAlertRuleGroup(ctx context.Context, g AlertRuleGroup) (AlertRuleGroup, error)
+	GetAlertRuleGroup(ctx context.Context, tenantName, name string) (AlertRuleGroup, error)
+	ListAlertRuleGroups(ctx context.Context, tenantName string) ([]AlertRuleGroup, error)
+	DeleteAlertRuleGroup(ctx context.Context, tenantName, name string) error
 
 	// Device addresses (ADR-0035). CreateDeviceAddress holds the allocation
 	// lock while it calls pick with every address already held in that trust

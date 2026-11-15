@@ -111,6 +111,12 @@ make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image fa
   configured with. Both are one request and one answer to a program pinned with `command=`. Neither
   key may be reused for the other. The log writer also purges a deleted tenant's lines, through
   VictoriaLogs' delete API on the store's loopback listener: vmauth must never route `/delete/*`.
+- **No tenant rule sets a routing label** (CHG-0071). vmalert lets a rule's or group's own labels
+  beat its `-external.label`, and Alertmanager routes on `tenant` and `deevnet_topic`, so a rule
+  labelled `tenant: other` would page another tenant. `logauth.AlertGroup.Validate` refuses them;
+  the API calls it, and `deevnet-log-user` calls it again before it writes a rule file. Don't move
+  either check behind the other. A group's rules are dry-run by vmalert on the store before the API
+  records the group.
 - **The log store's `auth.yml` has two authors.** Ansible owns `base.json`, the writer owns
   `users.d/<tenant>.json`, and `deevnet-log-user` renders the file from both. Don't make either side
   write `auth.yml` directly.

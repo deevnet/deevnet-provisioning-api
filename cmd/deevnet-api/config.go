@@ -349,20 +349,23 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 	}
 
 	site := tenant.Site{
-		Name:              getenv("DEEVNET_SITE"),
-		Octet:             ints["DEEVNET_SITE_OCTET"],
-		RootDomain:        getenv("DEEVNET_ROOT_DOMAIN"),
-		CertificateSites:  list(getenv("DEEVNET_CERTIFICATE_SITES")),
-		VRFVNIBase:        ints["DEEVNET_VRF_VNI_BASE"],
-		VNetVNIBase:       ints["DEEVNET_VNET_VNI_BASE"],
-		ControllerID:      getenv("DEEVNET_FABRIC_CONTROLLER"),
-		Node:              getenv("DEEVNET_FABRIC_NODE"),
-		DNSUpdateServer:   getenv("DEEVNET_DNS_UPDATE_SERVER"),
-		DNSApexNS:         getenv("DEEVNET_DNS_APEX_NS"),
-		DNSUpdateFrom:     updateFrom,
-		StateEndpoint:     getenv("DEEVNET_STATE_ENDPOINT"),
-		LogEndpoint:       getenv("DEEVNET_LOG_ENDPOINT"),
-		MetricsEndpoint:   getenv("DEEVNET_METRICS_ENDPOINT"),
+		Name:             getenv("DEEVNET_SITE"),
+		Octet:            ints["DEEVNET_SITE_OCTET"],
+		RootDomain:       getenv("DEEVNET_ROOT_DOMAIN"),
+		CertificateSites: list(getenv("DEEVNET_CERTIFICATE_SITES")),
+		VRFVNIBase:       ints["DEEVNET_VRF_VNI_BASE"],
+		VNetVNIBase:      ints["DEEVNET_VNET_VNI_BASE"],
+		ControllerID:     getenv("DEEVNET_FABRIC_CONTROLLER"),
+		Node:             getenv("DEEVNET_FABRIC_NODE"),
+		DNSUpdateServer:  getenv("DEEVNET_DNS_UPDATE_SERVER"),
+		DNSApexNS:        getenv("DEEVNET_DNS_APEX_NS"),
+		DNSUpdateFrom:    updateFrom,
+		StateEndpoint:    getenv("DEEVNET_STATE_ENDPOINT"),
+		LogEndpoint:      getenv("DEEVNET_LOG_ENDPOINT"),
+		MetricsEndpoint:  getenv("DEEVNET_METRICS_ENDPOINT"),
+		// Tenant alerting (CHG-0071): set where the log store's writer runs
+		// alerting, and then the writer below carries it.
+		NotifyEndpoint:    getenv("DEEVNET_NOTIFY_ENDPOINT"),
 		DashboardURL:      getenv("DEEVNET_GRAFANA_URL"),
 		StateBucket:       getenv("DEEVNET_STATE_BUCKET"),
 		ResolverForwardTo: getenv("DEEVNET_RESOLVER_FORWARD_TO"),
@@ -608,6 +611,11 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 			return wiring{}, fmt.Errorf("log store user writer: %w", err)
 		}
 		svc.LogWriter = w
+		// The same writer carries tenant alerting (CHG-0071), offered where
+		// the site names an ntfy endpoint.
+		if svc.Site.NotifyEndpoint != "" {
+			svc.Alerting = w
+		}
 	}
 
 	// The dashboard server. Reached over HTTPS on the API's own segment, and
