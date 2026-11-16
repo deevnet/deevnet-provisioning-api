@@ -8,6 +8,8 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.26.0 (2026-11-15)
+
 ### Added
 
 - **`deevnet-kit`: metrics and alerting on the take-home Pi** (CHG-0072), as on Deevnet (CHG-0070,
