@@ -94,6 +94,8 @@ func (k *kit) cmdDashboards() error {
 		AdminPassword: st.GrafanaAdminPassword,
 		CAFile:        k.caFile(),
 		LogEndpoint:   fmt.Sprintf("https://%s:%d", st.name("logs"), logPort),
+		// The metrics data source, as on a Deevnet site with metrics (CHG-0072).
+		MetricsEndpoint: fmt.Sprintf("https://%s:%d", st.name("metrics"), metricsPort),
 	})
 	if err != nil {
 		return err
@@ -117,7 +119,8 @@ func (k *kit) cmdDashboards() error {
 			return err
 		}
 	}
-	fmt.Printf("grafana: organisation %d for %s, with %d log data sources and the %q dashboard\n", org, st.Tenant, len(grafana.DataSources), "Start here")
+	fmt.Printf("grafana: organisation %d for %s, with %d log and %d metrics data sources and the %q dashboard\n",
+		org, st.Tenant, len(grafana.DataSources), len(grafana.MetricsDataSources), "Start here")
 	return nil
 }
 

@@ -30,6 +30,12 @@
 //   - Grafana's organisation is written by the same package the API uses
 //     (internal/backend/grafana), so its data sources have the same UIDs and a
 //     dashboard moves unchanged. The Pi's owner also holds the admin login.
+//   - Metrics are Deevnet's store, behind the same vmauth, with the same
+//     routes rendered by deevnet-log-user (CHG-0070, CHG-0072).
+//   - Alert rules come from the tenant's own Terraform, exported as JSON, and
+//     are sent to deevnet-log-user exactly as the API sends them, so they are
+//     checked and rendered the same way (CHG-0071, CHG-0072). The phone reads
+//     them on the Pi's own network.
 package main
 
 import (
@@ -73,6 +79,12 @@ const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
                                        a new issuing CA from the root on the stick: a new card
   deevnet-kit render                   rewrite the broker and log store config from state
   deevnet-kit dashboards               ensure the tenant's Grafana organisation (each boot)
+  deevnet-kit alerts import FILE|-     load alert rule groups exported from your Terraform:
+                                       terraform output -json alert_rules > rules.json
+  deevnet-kit alerts list              the groups loaded, and the ntfy topic of each
+  deevnet-kit alerts clear             remove every group; the phone's login stays
+  deevnet-kit alerts sync              write the groups again (each boot)
+  deevnet-kit notify                   what the phone's ntfy app needs: server, login, topics
   deevnet-kit selftest                 prove the card end to end: TLS, a device log over
                                        MQTT, an app log, and both read back through Grafana
 
@@ -119,6 +131,10 @@ func run(args []string) error {
 		return k.renderAll(true)
 	case "dashboards":
 		return k.cmdDashboards()
+	case "alerts":
+		return k.cmdAlerts(os.Stdout, args[1:])
+	case "notify":
+		return k.cmdNotify(os.Stdout)
 	case "selftest":
 		return k.cmdSelftest()
 	case "help", "-h", "--help":

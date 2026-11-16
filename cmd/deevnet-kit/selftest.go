@@ -74,6 +74,10 @@ func (k *kit) cmdSelftest() error {
 		checks = append(checks, check{"service " + u, func() error {
 			out, _ := exec.Command("systemctl", "is-active", u).Output()
 			if s := strings.TrimSpace(string(out)); s != "active" {
+				// Turned off by the owner, as on a small Pi: not a failure.
+				if unitDisabled(u) {
+					return nil
+				}
 				return fmt.Errorf("%s", s)
 			}
 			return nil
@@ -82,7 +86,7 @@ func (k *kit) cmdSelftest() error {
 	for _, p := range []struct {
 		what, svc string
 		port      int
-	}{{"broker", "mqtt", brokerPort}, {"log store", "logs", logPort}, {"grafana", "grafana", dashboardPort}} {
+	}{{"broker", "mqtt", brokerPort}, {"log store", "logs", logPort}, {"grafana", "grafana", dashboardPort}, {"ntfy", "ntfy", ntfyPort}} {
 		p := p
 		checks = append(checks, check{fmt.Sprintf("TLS %s :%d", p.what, p.port), func() error {
 			c, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp",
@@ -123,6 +127,25 @@ func (k *kit) cmdSelftest() error {
 			}
 			return waitForLine(hc, logBase, st.ReadToken, fmt.Sprintf("%d-0", st.Index), marker+"-app")
 		}},
+		check{"metrics: ingest token -> store -> read token", func() error {
+			return selftestMetrics(hc, fmt.Sprintf("https://%s:%d", st.name("metrics"), metricsPort), st, marker)
+		}},
+		check{"metrics: another tenant's partition refused", func() error {
+			other := st.Index + 1
+			req, _ := http.NewRequest(http.MethodPost,
+				fmt.Sprintf("https://%s:%d/insert/%d:0/prometheus/api/v1/import/prometheus", st.name("metrics"), metricsPort, other),
+				strings.NewReader("deevnet_kit_selftest 1\n"))
+			req.Header.Set("Authorization", "Bearer "+st.IngestToken)
+			resp, err := hc.Do(req)
+			if err != nil {
+				return err
+			}
+			resp.Body.Close()
+			if resp.StatusCode < 300 {
+				return fmt.Errorf("a write to partition %d:0 answered %d", other, resp.StatusCode)
+			}
+			return nil
+		}},
 		check{"grafana: tenant login, Editor in its own organisation", func() error {
 			var orgs []struct {
 				OrgID int    `json:"orgId"`
@@ -137,7 +160,7 @@ func (k *kit) cmdSelftest() error {
 			return nil
 		}},
 		check{"grafana: data sources and the starter dashboard", func() error {
-			for _, ds := range grafana.DataSources {
+			for _, ds := range append(append([]grafana.DataSource{}, grafana.DataSources...), grafana.MetricsDataSources...) {
 				if err := grafanaGet(hc, st, "/api/datasources/uid/"+ds.UID, nil); err != nil {
 					return fmt.Errorf("%s: %w", ds.UID, err)
 				}
@@ -169,6 +192,8 @@ func (k *kit) cmdSelftest() error {
 			return errors.New("the self-test's device line did not come back through Grafana")
 		}},
 	)
+
+	checks = append(checks, k.selftestAlerting(st, hc, marker)...)
 
 	fmt.Printf("deevnet-kit selftest - tenant %s (index %d)\n\n", st.Tenant, st.Index)
 	res := selftestResult{At: time.Now().UTC(), Failed: []string{}}
