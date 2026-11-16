@@ -96,6 +96,10 @@ type state struct {
 	// by the first alerts command.
 	NotifyPassword    string `json:"notify_password,omitempty"`
 	PublisherPassword string `json:"publisher_password,omitempty"`
+
+	// Buckets (CHG-0073): silo's root login, made with the first bucket.
+	SiloRootUser     string `json:"silo_root_user,omitempty"`
+	SiloRootPassword string `json:"silo_root_password,omitempty"`
 }
 
 // kit holds the paths. root is empty on a Pi and a temporary directory in
@@ -431,7 +435,11 @@ func (k *kit) cmdEnv(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(w, kitEnvCA(st, host(), creds, caName))
+	bl, err := k.bucketEnv(st, host(), creds.Buckets)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, kitEnvCA(st, host(), creds, caName)+bl)
 	return err
 }
 
@@ -458,14 +466,14 @@ LOG_DEVICE_PARTITION=%d-2
 METRICS_ENDPOINT=https://%s:%d
 `, st.Tenant, h, st.Tenant, st.appHost("mqtt", h), brokerPort, caName, st.appHost("logs", h), logPort,
 		st.IngestToken, st.ReadToken, st.Index, st.appHost("metrics", h), metricsPort) + appEnv(app) +
-		dashboardEnv(st, st.appHost("grafana", h)) + notifyEnv(st, h)
+		dashboardEnv(st, st.appHost("grafana", h)) + notifyEnv(st, h) + s3Env(st, h, caName)
 }
 
 func (k *kit) cmdExport(args []string) error {
 	// The directory first, then the flags: flag parsing stops at the first
 	// non-flag, and "export DIR --app ..." is how people will type it.
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return fmt.Errorf("export DIR [--app NAME --password-file FILE]")
+		return fmt.Errorf("export DIR [--app NAME --password-file FILE] [--bucket NAME[:KEY]]...")
 	}
 	dir := args[0]
 	rest, creds, err := k.appFlags("export", args[1:])
@@ -487,7 +495,11 @@ func (k *kit) cmdExport(args []string) error {
 		return err
 	}
 	envPath, caPath := filepath.Join(dir, "kit.env"), filepath.Join(dir, caName)
-	if err := writeFile(envPath, []byte(kitEnvCA(st, host(), creds, caName)), 0o600); err != nil {
+	bl, err := k.bucketEnv(st, host(), creds.Buckets)
+	if err != nil {
+		return err
+	}
+	if err := writeFile(envPath, []byte(kitEnvCA(st, host(), creds, caName)+bl), 0o600); err != nil {
 		return err
 	}
 	if err := writeFile(caPath, ca, 0o644); err != nil {

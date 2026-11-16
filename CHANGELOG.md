@@ -29,13 +29,24 @@ One tag covers everything this repository builds: the API, the two writers
     phone's login (reads its topics, publishes nowhere) and each loaded group's evaluation.
     `status` and `selftest` report a unit the owner disabled as off, not failed.
 
+- **`deevnet-kit`: buckets on the take-home Pi** (CHG-0073), as on Deevnet (CHG-0069), on silo.
+  `bucket add NAME --quota-gb N` (with `--versioning`, `--expire-days`,
+  `--noncurrent-expire-days`, `--public-read`) makes `<tenant>-NAME` and its default write key;
+  `bucket key add BUCKET KEY --access read|write`; `list` and `rm` for both. They drive
+  `internal/backend/minio` with the rules of `internal/tenant`, which now exports
+  `ValidateBucket`, `ValidBucketAccess` and `NewBucketCredentials` for it. `--key-file` adopts a
+  key from the tenant's Terraform, so an app's settings carry over. The quotas must fit the card.
+  The first bucket mints silo's root login and starts it. `kit.env` gains `S3_ENDPOINT` and
+  `S3_CA_FILE`; `env` and `export` take `--bucket NAME[:KEY]` for a key's `BUCKET_*` lines. The
+  card's TLS names gain `s3`.
+
 ### Upgrading
 
-- **A Deevnet Pi needs a certificate naming `metrics` and `ntfy` too.** Request it with
-  `names = ["logs", "grafana", "metrics", "ntfy"]`; until then `status` warns, and those two
+- **A Deevnet Pi needs a certificate naming `metrics`, `ntfy` and `s3` too.** Request it with
+  `names = ["logs", "grafana", "metrics", "ntfy", "s3"]`; until then `status` warns, and those
   services fail to verify by name.
-- The kit needs an image with the metrics store, vmalert, Alertmanager and ntfy, and the
-  `alerting` block in `/etc/deevnet/log-user.json`.
+- The kit needs an image with the metrics store, vmalert, Alertmanager and ntfy, the `alerting`
+  block in `/etc/deevnet/log-user.json`, and, for buckets, silo and its unit.
 
 ## 0.25.0 (2026-11-15)
 

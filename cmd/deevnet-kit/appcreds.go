@@ -27,7 +27,12 @@ import (
 // before it is written anywhere.
 
 // appCreds is the app's broker login, or empty for none.
-type appCreds struct{ User, Password string }
+type appCreds struct {
+	User, Password string
+	// Buckets are the --bucket NAME[:KEY] picks: the keys kit.env carries.
+	Buckets []string
+}
+
 
 // readPasswordFile reads the first line of path, or of stdin for "-". A file
 // rather than a flag, so the password stays out of shell history and ps.
@@ -59,6 +64,8 @@ func (k *kit) appFlags(cmd string, args []string) ([]string, appCreds, error) {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	app := fs.String("app", "", "the app's broker account, to write MQTT_USERNAME and MQTT_PASSWORD")
 	pwFile := fs.String("password-file", "", "that account's password, first line of the file; - for stdin")
+	var buckets multiFlag
+	fs.Var(&buckets, "bucket", "NAME[:KEY], repeatable: a bucket key kit.env carries (default key: default)")
 	if err := fs.Parse(args); err != nil {
 		return nil, appCreds{}, err
 	}
@@ -66,13 +73,14 @@ func (k *kit) appFlags(cmd string, args []string) ([]string, appCreds, error) {
 		return nil, appCreds{}, fmt.Errorf("--app and --password-file go together")
 	}
 	if *app == "" {
-		return fs.Args(), appCreds{}, nil
+		return fs.Args(), appCreds{Buckets: buckets}, nil
 	}
 	pw, err := readPasswordFile(*pwFile)
 	if err != nil {
 		return nil, appCreds{}, err
 	}
 	creds, err := k.appCredentials(*app, pw)
+	creds.Buckets = buckets
 	return fs.Args(), creds, err
 }
 

@@ -182,6 +182,33 @@ func ValidBucketName(name string) bool { return bucketNameRE.MatchString(name) }
 // ValidBucketKeyName reports whether name can be a bucket's key.
 func ValidBucketKeyName(name string) bool { return bucketKeyNameRE.MatchString(name) }
 
+// ValidateBucket applies the API's rules for a new bucket: its name, the
+// length of its store name, and its settings. deevnet-kit applies the same
+// rules on a take-home Pi (CHG-0073).
+func ValidateBucket(tenantName string, req BucketRequest) error {
+	if !ValidBucketName(req.Name) {
+		return invalid("bucket name must be 3-32 lowercase alphanumerics or dashes, starting with a letter and ending with a letter or digit")
+	}
+	if n := len(BucketStoreName(tenantName, req.Name)); n > maxStoreBucket {
+		return invalid("bucket name is too long: %q is %d characters, and the store allows %d", BucketStoreName(tenantName, req.Name), n, maxStoreBucket)
+	}
+	return validateBucketSettings(req)
+}
+
+// ValidBucketAccess reports whether a is a key's access: read or write.
+func ValidBucketAccess(a string) bool { return validAccess(a) }
+
+// NewBucketCredentials mints a key's access key and secret as the API does.
+func NewBucketCredentials() (accessKey, secretKey string, err error) {
+	if accessKey, err = randomString(accessKeyChars, accessKeyLength); err != nil {
+		return "", "", err
+	}
+	if secretKey, err = randomString(secretKeyChars, secretKeyLength); err != nil {
+		return "", "", err
+	}
+	return accessKey, secretKey, nil
+}
+
 func validateBucketSettings(req BucketRequest) error {
 	if req.QuotaGB < 1 {
 		return invalid("quota_gb must be 1 or more")
@@ -264,13 +291,7 @@ func (s *Service) CreateBucket(ctx context.Context, tenantName string, req Bucke
 	if err := s.bucketsTenant(ctx, tenantName); err != nil {
 		return Bucket{}, BucketKey{}, err
 	}
-	if !ValidBucketName(req.Name) {
-		return Bucket{}, BucketKey{}, invalid("bucket name must be 3-32 lowercase alphanumerics or dashes, starting with a letter and ending with a letter or digit")
-	}
-	if n := len(BucketStoreName(tenantName, req.Name)); n > maxStoreBucket {
-		return Bucket{}, BucketKey{}, invalid("bucket name is too long: %q is %d characters, and the store allows %d", BucketStoreName(tenantName, req.Name), n, maxStoreBucket)
-	}
-	if err := validateBucketSettings(req); err != nil {
+	if err := ValidateBucket(tenantName, req); err != nil {
 		return Bucket{}, BucketKey{}, err
 	}
 

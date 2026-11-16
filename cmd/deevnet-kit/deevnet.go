@@ -38,7 +38,7 @@ const (
 // kitServices are the labels the kit's own services answer to. A Deevnet
 // certificate must name each of them, site-less, or a service on this Pi
 // would fail to verify another.
-var kitServices = []string{"mqtt", "logs", "grafana", "metrics", "ntfy"}
+var kitServices = []string{"mqtt", "logs", "grafana", "metrics", "ntfy", "s3"}
 
 func (st state) deevnet() bool { return st.PKI == pkiDeevnet }
 
@@ -284,6 +284,10 @@ func (k *kit) restartForCert() error {
 		return nil
 	}
 	if err := runCmd("systemctl", "restart", "mosquitto", "vmauth", "grafana", "deevnet-log-bridge", "ntfy"); err != nil {
+		return err
+	}
+	// The bucket store, only where it runs.
+	if err := runCmd("systemctl", "try-restart", siloUnit); err != nil {
 		return err
 	}
 	return runCmd("systemctl", "restart", "deevnet-kit-dashboards")

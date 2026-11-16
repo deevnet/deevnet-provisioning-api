@@ -304,7 +304,7 @@ func TestADeevnetPiLeaves(t *testing.T) {
 	if prev := mustRead(t, k.previousRootFile()); !bytes.Equal(prev, ca.rootPEM) {
 		t.Error("the Deevnet Root was not kept as the previous root")
 	}
-	if hosts := string(mustRead(t, k.hostsFile())); !strings.Contains(hosts, "127.0.0.1 mqtt.eds.deevnet.net logs.eds.deevnet.net grafana.eds.deevnet.net metrics.eds.deevnet.net ntfy.eds.deevnet.net") {
+	if hosts := string(mustRead(t, k.hostsFile())); !strings.Contains(hosts, "127.0.0.1 mqtt.eds.deevnet.net logs.eds.deevnet.net grafana.eds.deevnet.net metrics.eds.deevnet.net ntfy.eds.deevnet.net s3.eds.deevnet.net") {
 		t.Errorf("the services' names are not mapped:\n%s", hosts)
 	}
 	if bridge := string(mustRead(t, k.bridgeEnv())); !strings.Contains(bridge, "ssl://mqtt.eds.deevnet.net:8883") {
@@ -356,7 +356,7 @@ func TestOwnerServerNames(t *testing.T) {
 		[]string{"mabell.deevnet.net"}, "mabell.deevnet.net")
 	want = []string{"mabellpi.local", "localhost", "127.0.0.1", "::1",
 		"mqtt.mabell.deevnet.net", "logs.mabell.deevnet.net", "grafana.mabell.deevnet.net",
-		"metrics.mabell.deevnet.net", "ntfy.mabell.deevnet.net", "www.mabell.deevnet.net"}
+		"metrics.mabell.deevnet.net", "ntfy.mabell.deevnet.net", "s3.mabell.deevnet.net", "www.mabell.deevnet.net"}
 	if !slices.Equal(names, want) || !slices.Equal(dropped, []string{"mqtt.eds.deevnet.net"}) {
 		t.Errorf("names %v, dropped %v", names, dropped)
 	}
