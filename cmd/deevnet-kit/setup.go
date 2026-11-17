@@ -312,7 +312,12 @@ func (k *kit) makeLogin(a setupAnswers) error {
 	if k.noOwner || k.noExec {
 		return nil
 	}
-	return runCmd("chown", "-R", a.User+":"+a.User, sshDir)
+	if err := runCmd("chown", "-R", a.User+":"+a.User, sshDir); err != nil {
+		return err
+	}
+	// SSH is already running by now, with passwords on: it takes the
+	// drop-in only when it rereads its configuration.
+	return runCmd("systemctl", "try-reload-or-restart", "ssh")
 }
 
 // runCmdInput runs a command with input on its stdin: chpasswd, so the
