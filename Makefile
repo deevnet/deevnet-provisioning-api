@@ -41,7 +41,7 @@ LDFLAGS := -s -w \
 
 REDOCLY ?= npx --yes @redocly/cli@1.34.5
 
-.PHONY: default help test test-integration vet spec-lint site site-serve build build-writer build-log-writer build-pi image stage stage-writer stage-log-writer stage-pi clean
+.PHONY: default help test test-integration vet spec-lint site site-serve build build-writer build-log-writer build-pi image stage stage-writer stage-log-writer stage-pi stage-vm clean
 
 default: help
 
@@ -69,6 +69,8 @@ help:
 	@echo "          deevnet-kit and $(LOGWRITER) for the Pi image, linux/$(PI_ARCH)"
 	@echo "  stage-pi"
 	@echo "          build-pi, then install both under $(ARTIFACTS_ROOT)/binaries (sudo)"
+	@echo "  stage-vm"
+	@echo "          stage-pi for linux/amd64, for the image factory's take-home VM image"
 	@echo "  image   podman build $(IMAGE):$(VERSION)"
 	@echo "  stage   image, then save it under $(STAGE_DIR) (sudo)"
 	@echo "  clean   remove bin/ and the built site"
@@ -221,6 +223,10 @@ stage-pi: build-pi
 	  sudo ln -sfn $$f $$d/$$c-latest-linux-$(PI_ARCH) && \
 	  echo "staged $$d/$$f" || exit 1; \
 	done
+
+# The take-home VM image (CHG-0074) carries the same two programs, for amd64.
+stage-vm:
+	$(MAKE) stage-pi PI_ARCH=amd64
 
 clean:
 	rm -rf bin site/public site/resources

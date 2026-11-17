@@ -8,6 +8,16 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+### Added
+
+- **`deevnet-kit setup`: a take-home virtual machine's first boot, on the console** (CHG-0074). A
+  VM has no boot partition to edit, so setup asks once for what a Pi's owner writes on the card:
+  the tenant, its index and the host name, which it writes to `/etc/deevnet-kit/deevnet-kit.txt`
+  for `init` to read, and the owner's login (in `sudo`), with a password and optionally an SSH key.
+  With a key, SSH takes keys only.
+- **`make stage-vm`** stages `deevnet-kit` and `deevnet-log-user` for linux/amd64, for the image
+  factory's take-home VM image.
+
 ## 0.26.0 (2026-11-15)
 
 ### Added

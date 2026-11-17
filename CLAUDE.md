@@ -29,6 +29,7 @@ make build    # static binary in bin/
 make image    # podman build localhost/deevnet-api:<version>
 make stage    # save the image under the Builder's artifact root (needs a clean, tagged tree)
 make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image factory's pi-backend image
+make stage-vm # the same for linux/amd64, for the take-home VM image (CHG-0074)
 ```
 
 ## Rules that are easy to get wrong
