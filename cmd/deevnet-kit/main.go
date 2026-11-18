@@ -32,6 +32,9 @@
 //     dashboard moves unchanged. The Pi's owner also holds the admin login.
 //   - Metrics are Deevnet's store, behind the same vmauth, with the same
 //     routes rendered by deevnet-log-user (CHG-0070, CHG-0072).
+//   - A virtual machine's first boot asks on the console (setup) for what a
+//     Pi's owner writes on the card, and writes it where init reads it
+//     (CHG-0074). From init on, a VM is a Pi.
 //   - Alert rules come from the tenant's own Terraform, exported as JSON, and
 //     are sent to deevnet-log-user exactly as the API sends them, so they are
 //     checked and rendered the same way (CHG-0071, CHG-0072). The phone reads
@@ -45,6 +48,8 @@ import (
 
 const usage = `deevnet-kit - the Deevnet tenant contract on a Pi of your own
 
+  deevnet-kit setup [--config FILE]    a virtual machine's first boot, on the console: tenant,
+                                       host name and your login, written where init reads them
   deevnet-kit init [--config FILE]     first boot: tenant, CA, tokens, service config
   deevnet-kit status                   services, endpoints and accounts
   deevnet-kit env [--app NAME --password-file FILE]
@@ -119,6 +124,8 @@ func run(args []string) error {
 	}
 	k := newKit("")
 	switch args[0] {
+	case "setup":
+		return k.cmdSetup(os.Stdin, os.Stdout, args[1:])
 	case "init":
 		return k.cmdInit(args[1:])
 	case "status":
