@@ -8,6 +8,8 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.27.0 (2026-11-17)
+
 ### Added
 
 - **`deevnet-kit setup`: a take-home virtual machine's first boot, on the console** (CHG-0074). A
