@@ -26,11 +26,11 @@ LOGWRITER       := deevnet-log-user
 LOGWRITER_STAGE := $(ARTIFACTS_ROOT)/binaries/$(LOGWRITER)
 LOGWRITER_FILE  := $(LOGWRITER)-$(VERSION)
 
-# The Pi take-home image (deevnet-image-factory, pi-backend) runs deevnet-kit
-# and the log store's user writer on arm64. The image factory downloads them
-# from the artifact server, so they are staged under the same binaries tree
-# with the architecture in the name.
-KIT      := deevnet-kit
+# The take-home images (deevnet-image-factory) run tenant2backend, the backend's
+# own tool (deevnet-kit until ADR-0045), and the log store's user writer. The
+# image factory downloads them from the artifact server, so they are staged
+# under the same binaries tree with the architecture in the name.
+KIT      := tenant2backend
 PI_ARCH  := arm64
 PI_BIN   := bin/linux-$(PI_ARCH)
 
@@ -66,7 +66,7 @@ help:
 	@echo "  stage-log-writer"
 	@echo "          build-log-writer, then install it under $(ARTIFACTS_ROOT)/binaries (sudo)"
 	@echo "  build-pi"
-	@echo "          deevnet-kit and $(LOGWRITER) for the Pi image, linux/$(PI_ARCH)"
+	@echo "          tenant2backend and $(LOGWRITER) for the Pi image, linux/$(PI_ARCH)"
 	@echo "  stage-pi"
 	@echo "          build-pi, then install both under $(ARTIFACTS_ROOT)/binaries (sudo)"
 	@echo "  stage-vm"

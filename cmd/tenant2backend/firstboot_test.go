@@ -41,7 +41,7 @@ func TestWiFiIsWrittenAndThePasswordLeavesTheBootPartition(t *testing.T) {
 	if err := k.applyWiFi(bc, cfg); err != nil {
 		t.Fatal(err)
 	}
-	path := k.p("/etc/NetworkManager/system-connections/deevnet-kit-wifi.nmconnection")
+	path := k.p("/etc/NetworkManager/system-connections/backend-wifi.nmconnection")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)

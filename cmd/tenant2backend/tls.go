@@ -22,7 +22,7 @@ import (
 // file kit.env names (ADR-0030 §4), so the app itself does not change.
 const (
 	// The name export gives the CA, and the name kit.env points the app at.
-	kitCAExportName = "deevnet-kit-ca.pem"
+	kitCAExportName = "backend-ca.pem"
 
 	caValidity = 10 * 365 * 24 * time.Hour
 	// 825 days is the longest server certificate Apple platforms accept, and
@@ -42,7 +42,7 @@ func (k *kit) issueCA() error {
 	h, _ := os.Hostname()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial(),
-		Subject:               pkix.Name{CommonName: "deevnet-kit CA " + h, Organization: []string{"deevnet-kit"}},
+		Subject:               pkix.Name{CommonName: "tenant2backend CA " + h, Organization: []string{"tenant2backend"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(caValidity),
 		IsCA:                  true,
@@ -171,7 +171,7 @@ func (k *kit) cmdRegenCerts() error {
 	}
 	// It would sign with the card's CA, which nothing on a Deevnet Pi trusts.
 	if st.deevnet() {
-		return errors.New("this is a Deevnet Pi: renew with deevnet-kit cert request, have it signed, then cert install")
+		return errors.New("this is a Deevnet Pi: renew with tenant2backend cert request, have it signed, then cert install")
 	}
 	// On the owner's root, the owner's issuing CA on this Pi renews it.
 	issue := k.issueServerCert

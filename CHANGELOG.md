@@ -4,9 +4,27 @@ Every release of the Deevnet API, newest first. Versions are `MAJOR.MINOR.PATCH`
 minor release may change behavior or configuration, and the notes say so under **Upgrading**.
 
 One tag covers everything this repository builds: the API, the two writers
-(`deevnet-broker-account`, `deevnet-log-user`) and `deevnet-kit`.
+(`deevnet-broker-account`, `deevnet-log-user`) and `tenant2backend` (`deevnet-kit` before 0.28.0).
 
 ## Unreleased
+
+### Changed
+
+- **`deevnet-kit` is renamed `tenant2backend`** (ADR-0045, CHG-0078): the take-home backend's tool
+  carries a name that is its owner's, not Deevnet's. Its files take the noun `backend`:
+  `/etc/backend`, `/var/lib/backend`, `/opt/backend`, `/etc/mosquitto/backend`, the `backend-*`
+  units it names, the `backend` group, `backend.txt` (on the card, and `/etc/backend/backend.txt`
+  from `setup`), `backend-ca.pem`, the sshd drop-in `backend.conf` and the CA's name. The app
+  contract keeps Deevnet's names: `DEEVNET_TENANT`, `X-Deevnet-Partition`, the data source UIDs.
+- `make stage-pi` and `stage-vm` stage it under `binaries/tenant2backend/`.
+
+### Upgrading
+
+- **Only new images get the name**: a backend flashed earlier keeps `deevnet-kit`. On the new
+  images, `deevnet-kit` is a link to `tenant2backend` for one release; called by that name it says
+  the new one on stderr. A card's `deevnet-kit.txt` is still read when `backend.txt` holds no
+  setting. Both go in the next release.
+- `backend` and `tenant2backend` are refused as the owner's login name, as `deevnet-kit` is.
 
 ## 0.27.0 (2026-11-17)
 

@@ -1,7 +1,7 @@
 {
-  "uid": "deevnet-kit-start",
+  "uid": "backend-start",
   "title": "Start here",
-  "tags": ["deevnet-kit"],
+  "tags": ["tenant2backend"],
   "time": { "from": "now-6h", "to": "now" },
   "refresh": "30s",
   "panels": [
@@ -11,7 +11,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
       "options": {
         "mode": "markdown",
-        "content": "Your devices' logs (`<tenant>/log/<device>` over MQTT) and your app's logs, on your own Pi. A number in a device's JSON log line, such as `{\"temp_c\": 21.5}`, is graphed below. This dashboard is yours: edit it, or declare your own with the Terraform `grafana` provider (see `/opt/deevnet-kit/README.txt`)."
+        "content": "Your devices' logs (`<tenant>/log/<device>` over MQTT) and your app's logs, on your own Pi. A number in a device's JSON log line, such as `{\"temp_c\": 21.5}`, is graphed below. This dashboard is yours: edit it, or declare your own with the Terraform `grafana` provider (see `/opt/backend/README.txt`)."
       }
     },
     {

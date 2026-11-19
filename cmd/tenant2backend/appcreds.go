@@ -33,7 +33,6 @@ type appCreds struct {
 	Buckets []string
 }
 
-
 // readPasswordFile reads the first line of path, or of stdin for "-". A file
 // rather than a flag, so the password stays out of shell history and ps.
 func readPasswordFile(path string) (string, error) {
@@ -93,7 +92,7 @@ func (k *kit) appCredentials(name, pw string) (appCreds, error) {
 	}
 	raw, err := os.ReadFile(k.accountFile(name))
 	if errors.Is(err, os.ErrNotExist) {
-		return appCreds{}, fmt.Errorf("no account %q; create it first: deevnet-kit account add %s ... --password-file FILE", name, name)
+		return appCreds{}, fmt.Errorf("no account %q; create it first: tenant2backend account add %s ... --password-file FILE", name, name)
 	}
 	if err != nil {
 		return appCreds{}, err
@@ -133,7 +132,7 @@ func mosquittoVerify(hash, pw string) bool {
 // appEnv is the two lines, or a note saying how to add them.
 func appEnv(c appCreds) string {
 	if c.User == "" {
-		return "# The app's broker login: deevnet-kit export DIR --app NAME --password-file FILE\n"
+		return "# The app's broker login: tenant2backend export DIR --app NAME --password-file FILE\n"
 	}
 	return fmt.Sprintf("MQTT_USERNAME=%s\nMQTT_PASSWORD=%s\n", c.User, c.Password)
 }

@@ -183,7 +183,7 @@ func ValidBucketName(name string) bool { return bucketNameRE.MatchString(name) }
 func ValidBucketKeyName(name string) bool { return bucketKeyNameRE.MatchString(name) }
 
 // ValidateBucket applies the API's rules for a new bucket: its name, the
-// length of its store name, and its settings. deevnet-kit applies the same
+// length of its store name, and its settings. tenant2backend applies the same
 // rules on a take-home Pi (CHG-0073).
 func ValidateBucket(tenantName string, req BucketRequest) error {
 	if !ValidBucketName(req.Name) {

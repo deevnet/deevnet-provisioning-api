@@ -34,7 +34,7 @@ import (
 //go:embed starter-dashboard.json
 var starterDashboard []byte
 
-const starterUID = "deevnet-kit-start"
+const starterUID = "backend-start"
 
 // The admin's login name. The tenant's login is the tenant's name, which
 // grafana.Client refuses when it equals this.
@@ -47,7 +47,7 @@ const grafanaReady = 5 * time.Minute
 // writeGrafanaEnv is grafana.service's EnvironmentFile: the two secrets. The
 // rest of Grafana's settings are in the unit, where they can be read.
 func (k *kit) writeGrafanaEnv(st state) error {
-	env := fmt.Sprintf(`# deevnet-kit - generated; Grafana's secrets
+	env := fmt.Sprintf(`# tenant2backend - generated; Grafana's secrets
 GF_SECURITY_ADMIN_USER=%s
 GF_SECURITY_ADMIN_PASSWORD=%s
 GF_SECURITY_SECRET_KEY=%s
@@ -63,7 +63,7 @@ func dashboardURL(h string) string { return fmt.Sprintf("https://%s:%d", h, dash
 // must carry it (CHG-0024). Empty until the organisation exists.
 func dashboardEnv(st state, h string) string {
 	if st.DashboardOrg == 0 {
-		return "# Grafana is not set up yet: systemctl status deevnet-kit-dashboards\n"
+		return "# Grafana is not set up yet: systemctl status backend-dashboards\n"
 	}
 	return fmt.Sprintf(`GRAFANA_URL=%s
 GRAFANA_AUTH=%s:%s

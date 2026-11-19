@@ -78,7 +78,7 @@ func TestBucketAddMakesTheBucketAndItsWriteKey(t *testing.T) {
 	if env := string(mustRead(t, k.siloEnv())); !strings.Contains(env, "MINIO_ROOT_USER="+st.SiloRootUser) || !strings.Contains(env, "MINIO_BROWSER=off") {
 		t.Errorf("silo.env:\n%s", env)
 	}
-	if target, err := os.Readlink(filepath.Join(k.siloCertsDir(), "public.crt")); err != nil || target != "/etc/deevnet-kit/tls/server.pem" {
+	if target, err := os.Readlink(filepath.Join(k.siloCertsDir(), "public.crt")); err != nil || target != "/etc/backend/tls/server.pem" {
 		t.Errorf("public.crt -> %q, %v", target, err)
 	}
 }

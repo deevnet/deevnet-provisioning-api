@@ -60,7 +60,7 @@ func (k *kit) writeNames(names []string) error {
 	}
 	var b strings.Builder
 	b.WriteString("# Extra names and addresses for this Pi's server certificate, one a line.\n")
-	b.WriteString("# Edit with `deevnet-kit names`; `deevnet-kit regen-certs` applies them.\n")
+	b.WriteString("# Edit with `tenant2backend names`; `tenant2backend regen-certs` applies them.\n")
 	for _, n := range names {
 		b.WriteString(n + "\n")
 	}
@@ -159,6 +159,6 @@ func (k *kit) cmdNames(args []string) error {
 	if err := k.writeNames(next); err != nil {
 		return err
 	}
-	fmt.Printf("%d extra names; run `sudo deevnet-kit regen-certs` to issue a certificate with them\n", len(next))
+	fmt.Printf("%d extra names; run `sudo tenant2backend regen-certs` to issue a certificate with them\n", len(next))
 	return nil
 }

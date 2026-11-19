@@ -22,8 +22,8 @@ import (
 )
 
 // The services the image runs, by unit name.
-var units = []string{"mosquitto", "victorialogs", "vmauth", "deevnet-log-bridge", "grafana", "deevnet-kit-dashboards",
-	"vmstorage", "vminsert", "vmselect", "alertmanager", "ntfy", "deevnet-kit-alerting"}
+var units = []string{"mosquitto", "victorialogs", "vmauth", "deevnet-log-bridge", "grafana", "backend-dashboards",
+	"vmstorage", "vminsert", "vmselect", "alertmanager", "ntfy", "backend-alerting"}
 
 const (
 	// The ports are Deevnet's, so an app moved from Deevnet changes a host
@@ -50,10 +50,13 @@ const (
 	// creates the rest.
 	mosquittoUser = "mosquitto"
 	storeUser     = "victoria"
-	tlsGroup      = "deevnet-kit"
+	tlsGroup      = "backend"
 
-	defaultBootConfig = "/boot/firmware/deevnet-kit.txt"
-	defaultTenant     = "pi"
+	defaultBootConfig = "/boot/firmware/backend.txt"
+	// The card's settings file before the rename (ADR-0045). A card set up by
+	// the old instructions is still read, for one release.
+	legacyBootConfig = "/boot/firmware/deevnet-kit.txt"
+	defaultTenant    = "pi"
 )
 
 // state is what init decides once and every later command reads.
@@ -73,16 +76,16 @@ type state struct {
 
 	// Grafana (ADR-0024, CHG-0024). The admin is the Pi's owner's; the
 	// tenant's login is what an app and its Terraform use, as on Deevnet.
-	// DashboardOrg is 0 until `deevnet-kit dashboards` has run once.
+	// DashboardOrg is 0 until `tenant2backend dashboards` has run once.
 	GrafanaAdminPassword string `json:"grafana_admin_password"`
 	GrafanaSecretKey     string `json:"grafana_secret_key"`
 	DashboardPassword    string `json:"dashboard_password"`
 	DashboardOrg         int    `json:"dashboard_org"`
 
 	// PKI is empty while the card's own CA signs its certificate, "deevnet"
-	// once a Tenant Service CA certificate is installed (deevnet-kit cert
+	// once a Tenant Service CA certificate is installed (tenant2backend cert
 	// install, ADR-0041 §2), and "owner" once the owner's own CA signs it
-	// (deevnet-kit pki switch, ADR-0041 §3).
+	// (tenant2backend pki switch, ADR-0041 §3).
 	PKI string `json:"pki,omitempty"`
 
 	// The owner's own PKI, from pki init: the organization its CAs carry,
@@ -115,7 +118,7 @@ func newKit(root string) *kit { return &kit{root: root} }
 
 func (k *kit) p(path string) string { return filepath.Join(k.root, path) }
 
-func (k *kit) etc() string          { return k.p("/etc/deevnet-kit") }
+func (k *kit) etc() string          { return k.p("/etc/backend") }
 func (k *kit) stateFile() string    { return filepath.Join(k.etc(), "kit.json") }
 func (k *kit) accountsDir() string  { return filepath.Join(k.etc(), "accounts") }
 func (k *kit) tlsDir() string       { return filepath.Join(k.etc(), "tls") }
@@ -123,13 +126,13 @@ func (k *kit) caFile() string       { return filepath.Join(k.tlsDir(), "ca.pem")
 func (k *kit) bridgeEnv() string    { return filepath.Join(k.etc(), "log-bridge.env") }
 func (k *kit) grafanaEnv() string   { return filepath.Join(k.etc(), "grafana.env") }
 func (k *kit) logDir() string       { return filepath.Join(k.etc(), "log") }
-func (k *kit) mosquittoDir() string { return k.p("/etc/mosquitto/deevnet-kit") }
+func (k *kit) mosquittoDir() string { return k.p("/etc/mosquitto/backend") }
 
 // --- init -----------------------------------------------------------------------
 
 func (k *kit) cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultBootConfig, "the boot partition's deevnet-kit.txt")
+	cfgPath := fs.String("config", defaultBootConfig, "the boot partition's backend.txt")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -140,6 +143,9 @@ func (k *kit) cmdInit(args []string) error {
 		return nil
 	}
 
+	if *cfgPath == defaultBootConfig {
+		*cfgPath = bootConfigOrLegacy(defaultBootConfig, legacyBootConfig)
+	}
 	bc, err := readBootConfig(*cfgPath)
 	if err != nil {
 		return err
@@ -192,7 +198,7 @@ func (k *kit) cmdInit(args []string) error {
 	if err := writeJSON(k.stateFile(), st, 0o600); err != nil {
 		return err
 	}
-	fmt.Printf("initialised tenant %q (index %d); run: sudo deevnet-kit export ~/deevnet-kit\n", st.Tenant, st.Index)
+	fmt.Printf("initialised tenant %q (index %d); run: sudo tenant2backend export ~/tenant2backend\n", st.Tenant, st.Index)
 	return nil
 }
 
@@ -213,6 +219,34 @@ type bootSettings struct {
 
 // readBootConfig reads key=value lines. A missing file is not an error: the
 // card still has to come up, as tenant "pi".
+// bootConfigOrLegacy picks the card's settings file: the old name's when it
+// exists and the new one holds no setting (the image's template only).
+func bootConfigOrLegacy(path, legacy string) string {
+	if _, err := os.Stat(legacy); err != nil {
+		return path
+	}
+	if hasSettings(path) {
+		return path
+	}
+	return legacy
+}
+
+// hasSettings reports whether a settings file has any line that is not blank
+// or a comment. A missing file has none.
+func hasSettings(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line != "" && !strings.HasPrefix(line, "#") {
+			return true
+		}
+	}
+	return false
+}
+
 func readBootConfig(path string) (bootSettings, error) {
 	bc := bootSettings{Tenant: defaultTenant, Index: 1}
 	f, err := os.Open(path)
@@ -305,7 +339,7 @@ func (k *kit) loadState() (state, error) {
 	var st state
 	b, err := os.ReadFile(k.stateFile())
 	if errors.Is(err, os.ErrNotExist) {
-		return st, fmt.Errorf("not initialised: run deevnet-kit init (first boot does this)")
+		return st, fmt.Errorf("not initialised: run tenant2backend init (first boot does this)")
 	}
 	if err != nil {
 		return st, err
@@ -356,7 +390,7 @@ func (k *kit) renderLogStore(st state, reload bool) error {
 		}
 	}
 	base := map[string]string{
-		"_comment":       "deevnet-kit - the half of the store's users the image owns",
+		"_comment":       "tenant2backend - the half of the store's users the image owns",
 		"backend":        "http://127.0.0.1:9428/",
 		"operator_token": st.OperatorToken,
 		"bridge_token":   st.BridgeStoreToken,
@@ -391,7 +425,7 @@ func (k *kit) renderLogStore(st state, reload bool) error {
 }
 
 func (k *kit) writeBridgeEnv(st state) error {
-	env := fmt.Sprintf(`# deevnet-kit - generated; the log bridge's environment
+	env := fmt.Sprintf(`# tenant2backend - generated; the log bridge's environment
 DEEVNET_BRIDGE_BROKER_URL=ssl://%s:%d
 DEEVNET_BRIDGE_BROKER_USERNAME=%s
 DEEVNET_BRIDGE_BROKER_PASSWORD=%s
@@ -405,7 +439,7 @@ DEEVNET_BRIDGE_STORE_CA_FILE=%s
 
 // caFileOnHost is the CA's path as the services see it, which in tests is not
 // where the test wrote it.
-func (k *kit) caFileOnHost() string { return "/etc/deevnet-kit/tls/ca.pem" }
+func (k *kit) caFileOnHost() string { return "/etc/backend/tls/ca.pem" }
 
 // --- env, export, status ----------------------------------------------------------------
 
@@ -452,7 +486,7 @@ func kitEnv(st state, h string, app appCreds) string {
 // kitEnvCA is kitEnv with the CA file export writes beside it, which between
 // pki init and pki switch is the trust bundle.
 func kitEnvCA(st state, h string, app appCreds, caName string) string {
-	return fmt.Sprintf(`# deevnet-kit - tenant %s on %s
+	return fmt.Sprintf(`# tenant2backend - tenant %s on %s
 # The same names, filled from terraform outputs, point this app at Deevnet.
 DEEVNET_TENANT=%s
 MQTT_HOST=%s
@@ -543,7 +577,7 @@ func (k *kit) cmdStatus() error {
 	if st.DashboardOrg > 0 {
 		fmt.Printf("grafana  https://%s:%d  (login %s; organisation %d)\n", st.appHost("grafana", h), dashboardPort, st.Tenant, st.DashboardOrg)
 	} else {
-		fmt.Printf("grafana  https://%s:%d  (not set up yet: systemctl status deevnet-kit-dashboards)\n", st.appHost("grafana", h), dashboardPort)
+		fmt.Printf("grafana  https://%s:%d  (not set up yet: systemctl status backend-dashboards)\n", st.appHost("grafana", h), dashboardPort)
 	}
 	fmt.Println()
 	bad := 0
@@ -563,12 +597,12 @@ func (k *kit) cmdStatus() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("alerts   %s  (%d rule group(s); deevnet-kit notify for the phone)\n", notifyURL(st, h), len(groups))
+	fmt.Printf("alerts   %s  (%d rule group(s); tenant2backend notify for the phone)\n", notifyURL(st, h), len(groups))
 	accts, err := k.loadAccounts()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\n%d broker account(s); deevnet-kit account list\n", len(accts))
+	fmt.Printf("\n%d broker account(s); tenant2backend account list\n", len(accts))
 	fmt.Printf("selftest %s\n", k.lastSelftest())
 	// Not a failure of the services, but a device refuses the certificate -
 	// and says only "TLS error".

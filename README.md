@@ -73,7 +73,7 @@ api/openapi.yaml        the API contract (OpenAPI 3.1)
 cmd/deevnet-api/        main and configuration: pool, migrations, backends, graceful shutdown
 cmd/deevnet-broker-account/  the broker account writer, a host binary for the messaging VM
 cmd/deevnet-log-user/   the log store's user writer, a host binary for the observability store
-cmd/deevnet-kit/        the API's stand-in on a take-home Raspberry Pi
+cmd/tenant2backend/     the API's stand-in on a take-home backend (deevnet-kit until 0.28.0)
 internal/server/        routes, handlers, and the tests that hold the spec to them
 internal/auth/          bearer token parsing
 internal/openbao/       KV, Transit and response wrapping over OpenBao's HTTP API

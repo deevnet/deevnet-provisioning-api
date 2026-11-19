@@ -191,9 +191,9 @@ func (k *kit) certInstall(fullchainPath, rootPath string) error {
 		switch {
 		case renewal:
 		case keyPEM == nil && st.deevnet():
-			return errors.New("the certificate is not for the key this Pi serves, and no request is pending: run deevnet-kit cert request, and have that signed")
+			return errors.New("the certificate is not for the key this Pi serves, and no request is pending: run tenant2backend cert request, and have that signed")
 		case keyPEM == nil:
-			return errors.New("no request is pending: run deevnet-kit cert request, and have that signed")
+			return errors.New("no request is pending: run tenant2backend cert request, and have that signed")
 		default:
 			return errors.New("the certificate is not for the pending request's key")
 		}
@@ -263,7 +263,7 @@ func (k *kit) certInstall(fullchainPath, rootPath string) error {
 	}
 	fmt.Printf("installed: %s, valid to %s; this Pi now answers as %s\n",
 		leaf.Subject.CommonName, leaf.NotAfter.Format("2006-01-02"), strings.Join(leaf.DNSNames, ", "))
-	fmt.Println("an app's kit.env changes: deevnet-kit export again, with deevnet-root-ca.pem")
+	fmt.Println("an app's kit.env changes: tenant2backend export again, with deevnet-root-ca.pem")
 	return k.restartForCert()
 }
 
@@ -290,7 +290,7 @@ func (k *kit) restartForCert() error {
 	if err := runCmd("systemctl", "try-restart", siloUnit); err != nil {
 		return err
 	}
-	return runCmd("systemctl", "restart", "deevnet-kit-dashboards")
+	return runCmd("systemctl", "restart", "backend-dashboards")
 }
 
 // certWarning is what status and selftest say about the server certificate,
@@ -307,7 +307,7 @@ func (k *kit) certWarning(st state) (string, error) {
 		if err != nil || len(missing) == 0 {
 			return "", err
 		}
-		return fmt.Sprintf("the certificate does not name %v; a device dialling it will fail: sudo deevnet-kit regen-certs", missing), nil
+		return fmt.Sprintf("the certificate does not name %v; a device dialling it will fail: sudo tenant2backend regen-certs", missing), nil
 	}
 	b, err := os.ReadFile(k.serverFile())
 	if err != nil {
@@ -326,11 +326,11 @@ func (k *kit) certWarning(st state) (string, error) {
 	if len(missing) == 0 {
 		return "", nil
 	}
-	return fmt.Sprintf("the certificate does not name %s; run deevnet-kit cert request, have it signed with names %s, then cert install",
+	return fmt.Sprintf("the certificate does not name %s; run tenant2backend cert request, have it signed with names %s, then cert install",
 		strings.Join(missing, ", "), strings.Join(kitServices[1:], ", ")), nil
 }
 
-const hostsBegin, hostsEnd = "# BEGIN deevnet-kit", "# END deevnet-kit"
+const hostsBegin, hostsEnd = "# BEGIN tenant2backend", "# END tenant2backend"
 
 // writeHosts maps this Pi's own names to loopback, so its services reach one
 // another by the names the certificate holds. Everything outside the block is
