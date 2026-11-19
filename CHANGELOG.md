@@ -8,6 +8,8 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.28.0 (2026-11-19)
+
 ### Changed
 
 - **`deevnet-kit` is renamed `tenant2backend`** (ADR-0045, CHG-0078): the take-home backend's tool
