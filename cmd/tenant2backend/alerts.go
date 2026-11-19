@@ -73,7 +73,7 @@ func (k *kit) cmdAlerts(w io.Writer, args []string) error {
 		if err := k.putAlerts(st, groups); err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "%d alert rule group(s) loaded for %s; deevnet-kit notify shows the phone's settings\n", len(groups), st.Tenant)
+		fmt.Fprintf(w, "%d alert rule group(s) loaded for %s; tenant2backend notify shows the phone's settings\n", len(groups), st.Tenant)
 		return nil
 	case args[0] == "list" && len(args) == 1:
 		groups, err := k.loadAlerts()
@@ -81,7 +81,7 @@ func (k *kit) cmdAlerts(w io.Writer, args []string) error {
 			return err
 		}
 		if len(groups) == 0 {
-			fmt.Fprintln(w, "no alert rule groups; deevnet-kit alerts import rules.json")
+			fmt.Fprintln(w, "no alert rule groups; tenant2backend alerts import rules.json")
 			return nil
 		}
 		for _, g := range groups {
@@ -96,7 +96,7 @@ func (k *kit) cmdAlerts(w io.Writer, args []string) error {
 		fmt.Fprintln(w, "alert rule groups removed; the phone's login stays")
 		return nil
 	case args[0] == "sync" && len(args) == 1:
-		// The image's deevnet-kit-alerting unit, after Alertmanager and ntfy
+		// The image's backend-alerting unit, after Alertmanager and ntfy
 		// start: the groups this card already holds, written again, which
 		// also makes the phone's login on a first boot.
 		groups, err := k.loadAlerts()
@@ -230,7 +230,7 @@ func (k *kit) writeAlertingFiles(st state) error {
 // writeNtfyEnv is the part of ntfy's settings that depends on the card: the
 // URL the phone subscribes to. The rest is in the unit.
 func (k *kit) writeNtfyEnv(st state) error {
-	env := fmt.Sprintf("# deevnet-kit - generated; ntfy's settings for this card\nNTFY_BASE_URL=%s\n", notifyURL(st, host()))
+	env := fmt.Sprintf("# tenant2backend - generated; ntfy's settings for this card\nNTFY_BASE_URL=%s\n", notifyURL(st, host()))
 	return writeFile(k.ntfyEnv(), []byte(env), 0o644)
 }
 
@@ -242,7 +242,7 @@ func notifyTopic(st state, topic string) string { return st.Tenant + "-" + topic
 // fills from deevnet_tenant's notify_* attributes.
 func notifyEnv(st state, h string) string {
 	if st.NotifyPassword == "" {
-		return "# Alerting is not set up yet: systemctl status deevnet-kit-alerting\n"
+		return "# Alerting is not set up yet: systemctl status backend-alerting\n"
 	}
 	return fmt.Sprintf("NOTIFY_URL=%s\nNOTIFY_USERNAME=%s\nNOTIFY_PASSWORD=%s\n", notifyURL(st, h), st.Tenant, st.NotifyPassword)
 }
@@ -255,7 +255,7 @@ func (k *kit) cmdNotify(w io.Writer) error {
 		return err
 	}
 	if st.NotifyPassword == "" {
-		return errors.New("alerting is not set up yet: sudo deevnet-kit alerts sync")
+		return errors.New("alerting is not set up yet: sudo tenant2backend alerts sync")
 	}
 	groups, err := k.loadAlerts()
 	if err != nil {

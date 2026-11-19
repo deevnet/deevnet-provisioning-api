@@ -224,7 +224,7 @@ func TestInstallRefuses(t *testing.T) {
 func TestACardOnItsOwnCAIsUnchanged(t *testing.T) {
 	k, st := initKit(t, "tenant=eds\nindex=2\n")
 	env := kitEnv(st, "eds-backend.local", appCreds{})
-	for _, want := range []string{"MQTT_HOST=eds-backend.local", "MQTT_CA_FILE=deevnet-kit-ca.pem"} {
+	for _, want := range []string{"MQTT_HOST=eds-backend.local", "MQTT_CA_FILE=backend-ca.pem"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("kit.env has no %s", want)
 		}
@@ -341,7 +341,7 @@ func TestInstallRewritesTheDataSources(t *testing.T) {
 	}
 	if len(ran) != 3 || !slices.Contains(ran[0], "grafana") || !slices.Contains(ran[0], "ntfy") ||
 		strings.Join(ran[1], " ") != "systemctl try-restart silo" ||
-		strings.Join(ran[2], " ") != "systemctl restart deevnet-kit-dashboards" {
+		strings.Join(ran[2], " ") != "systemctl restart backend-dashboards" {
 		t.Errorf("ran %v; want the services restarted, then the dashboards step", ran)
 	}
 }

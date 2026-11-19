@@ -15,7 +15,7 @@
 // the tenant's log read token, so a query runs under the log store's own
 // boundary rather than one Grafana would have to enforce.
 //
-// The Pi's deevnet-kit calls this package too, against its own Grafana, so the
+// The Pi's tenant2backend calls this package too, against its own Grafana, so the
 // rules here are the Pi's as well.
 //
 // Behaviour relied on here was checked against Grafana 13.2.2:

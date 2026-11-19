@@ -21,7 +21,7 @@ import (
 
 // setup is the console's stand-in for the Pi's boot partition (CHG-0074).
 //
-// A Pi's owner writes deevnet-kit.txt, userconf.txt and ssh on the card before
+// A Pi's owner writes backend.txt, userconf.txt and ssh on the card before
 // its first boot. A virtual machine's disk, or a machine installed from the
 // ISO, has no partition to edit, so setup asks the same questions on the
 // console, once, before first boot: the tenant, its index and the host name,
@@ -30,7 +30,7 @@ import (
 
 const (
 	// Where setup writes, and where a virtual machine's first boot reads.
-	consoleBootConfig = "/etc/deevnet-kit/deevnet-kit.txt"
+	consoleBootConfig = "/etc/backend/backend.txt"
 	minPasswordLen    = 8
 )
 
@@ -38,7 +38,7 @@ var userRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Names the image already uses, or that would confuse a reader of ps.
 var reservedUsers = map[string]bool{
-	"root": true, "admin": true, "deevnet": true, "deevnet-kit": true, "mosquitto": true,
+	"root": true, "admin": true, "deevnet": true, "deevnet-kit": true, "backend": true, "tenant2backend": true, "mosquitto": true,
 	"victoria": true, "grafana": true, "silo": true, "ntfy": true, "nobody": true, "a_autoprov": true,
 }
 
@@ -147,7 +147,7 @@ func (k *kit) cmdSetup(in io.Reader, out io.Writer, args []string) error {
 
 	p := newPrompter(in, out)
 	fmt.Fprint(out, `
-deevnet-kit setup: this machine's first boot
+tenant2backend setup: this machine's first boot
 
 These are the settings a Raspberry Pi's owner writes on its card. They are
 asked once. Your tenant's name and index are in its terraform output.
@@ -260,8 +260,8 @@ func (k *kit) applySetup(a setupAnswers, cfg string, out io.Writer) error {
 	if err := k.makeLogin(a); err != nil {
 		return fmt.Errorf("making the login %s: %w", a.User, err)
 	}
-	body := fmt.Sprintf(`# deevnet-kit - written by deevnet-kit setup on the console, and read ONCE by
-# first boot (deevnet-kit init), as a Pi reads its boot partition's copy.
+	body := fmt.Sprintf(`# tenant2backend - written by tenant2backend setup on the console, and read ONCE by
+# first boot (tenant2backend init), as a Pi reads its boot partition's copy.
 tenant=%s
 index=%d
 hostname=%s
@@ -305,8 +305,8 @@ func (k *kit) makeLogin(a setupAnswers) error {
 	if err := os.MkdirAll(k.p("/etc/ssh/sshd_config.d"), 0o755); err != nil {
 		return err
 	}
-	if err := writeFile(k.p("/etc/ssh/sshd_config.d/deevnet-kit.conf"),
-		[]byte("# deevnet-kit setup: the owner gave an SSH key, so SSH takes keys only.\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n"), 0o644); err != nil {
+	if err := writeFile(k.p("/etc/ssh/sshd_config.d/backend.conf"),
+		[]byte("# tenant2backend setup: the owner gave an SSH key, so SSH takes keys only.\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n"), 0o644); err != nil {
 		return err
 	}
 	if k.noOwner || k.noExec {

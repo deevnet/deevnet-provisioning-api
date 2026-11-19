@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -35,7 +36,7 @@ func TestSetupWritesWhatInitReads(t *testing.T) {
 		t.Error("the password was echoed")
 	}
 	// No key: SSH keeps passwords, so nothing turns them off.
-	if _, err := os.Stat(k.p("/etc/ssh/sshd_config.d/deevnet-kit.conf")); err == nil {
+	if _, err := os.Stat(k.p("/etc/ssh/sshd_config.d/backend.conf")); err == nil {
 		t.Error("SSH passwords turned off with no key to sign in by")
 	}
 }
@@ -95,7 +96,7 @@ func TestSetupWithKeyIsKeyOnly(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(ak)) != testKey {
 		t.Errorf("authorized_keys = %q, %v", ak, err)
 	}
-	conf, _ := os.ReadFile(k.p("/etc/ssh/sshd_config.d/deevnet-kit.conf"))
+	conf, _ := os.ReadFile(k.p("/etc/ssh/sshd_config.d/backend.conf"))
 	if !strings.Contains(string(conf), "PasswordAuthentication no") {
 		t.Errorf("sshd drop-in = %q", conf)
 	}
@@ -136,5 +137,27 @@ func TestSetupEndOfInput(t *testing.T) {
 	}
 	if _, err := os.Stat(k.p(consoleBootConfig)); err == nil {
 		t.Error("settings written from a part answer")
+	}
+}
+
+// A card set up by the old instructions (deevnet-kit.txt) is still read while
+// the new file holds only the image's template (ADR-0045).
+func TestBootConfigOrLegacy(t *testing.T) {
+	dir := t.TempDir()
+	cur, old := filepath.Join(dir, "backend.txt"), filepath.Join(dir, "deevnet-kit.txt")
+	if got := bootConfigOrLegacy(cur, old); got != cur {
+		t.Fatalf("neither file: got %s, want %s", got, cur)
+	}
+	os.WriteFile(old, []byte("tenant=bench1\nindex=4\n"), 0o644)
+	if got := bootConfigOrLegacy(cur, old); got != old {
+		t.Fatalf("only the old file: got %s, want %s", got, old)
+	}
+	os.WriteFile(cur, []byte("# tenant=\n# hostname=\n\n"), 0o644)
+	if got := bootConfigOrLegacy(cur, old); got != old {
+		t.Fatalf("template plus old file: got %s, want %s", got, old)
+	}
+	os.WriteFile(cur, []byte("tenant=other\n"), 0o644)
+	if got := bootConfigOrLegacy(cur, old); got != cur {
+		t.Fatalf("both set: got %s, want the new %s", got, cur)
 	}
 }

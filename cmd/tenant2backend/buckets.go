@@ -168,7 +168,7 @@ func (k *kit) bucketAdd(w io.Writer, st state, args []string) error {
 		return err
 	}
 	fmt.Fprintf(w, "bucket %s, %d GB; key %q (write): %s\n", tenant.BucketStoreName(st.Tenant, b.Name), b.QuotaGB, tenant.DefaultBucketKey, key.AccessKey)
-	fmt.Fprintf(w, "export it to an app: sudo deevnet-kit export DIR --bucket %s:%s\n", b.Name, tenant.DefaultBucketKey)
+	fmt.Fprintf(w, "export it to an app: sudo tenant2backend export DIR --bucket %s:%s\n", b.Name, tenant.DefaultBucketKey)
 	return nil
 }
 
@@ -178,7 +178,7 @@ func (k *kit) bucketList(w io.Writer, st state) error {
 		return err
 	}
 	if len(bs) == 0 {
-		fmt.Fprintln(w, "no buckets; deevnet-kit bucket add NAME --quota-gb N")
+		fmt.Fprintln(w, "no buckets; tenant2backend bucket add NAME --quota-gb N")
 		return nil
 	}
 	for _, b := range bs {
@@ -457,7 +457,7 @@ func (k *kit) ensureSilo(st state) (state, error) {
 			return st, err
 		}
 	}
-	env := fmt.Sprintf("# deevnet-kit - generated; silo's root login and settings\nMINIO_ROOT_USER=%s\nMINIO_ROOT_PASSWORD=%s\nMINIO_BROWSER=off\n",
+	env := fmt.Sprintf("# tenant2backend - generated; silo's root login and settings\nMINIO_ROOT_USER=%s\nMINIO_ROOT_PASSWORD=%s\nMINIO_BROWSER=off\n",
 		st.SiloRootUser, st.SiloRootPassword)
 	if err := writeFile(k.siloEnv(), []byte(env), 0o600); err != nil {
 		return st, err
@@ -466,7 +466,7 @@ func (k *kit) ensureSilo(st state) (state, error) {
 	if err := os.MkdirAll(k.siloCertsDir(), 0o755); err != nil {
 		return st, err
 	}
-	for link, target := range map[string]string{"public.crt": "/etc/deevnet-kit/tls/server.pem", "private.key": "/etc/deevnet-kit/tls/server-key.pem"} {
+	for link, target := range map[string]string{"public.crt": "/etc/backend/tls/server.pem", "private.key": "/etc/backend/tls/server-key.pem"} {
 		p := filepath.Join(k.siloCertsDir(), link)
 		if cur, err := os.Readlink(p); err == nil && cur == target {
 			continue

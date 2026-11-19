@@ -25,7 +25,7 @@ import (
 // selftest proves the card works end to end, the way an app and a device will
 // use it: over TLS against the card's CA, with the tenant's own tokens and
 // login. It is run by its own unit on every boot, and by hand with
-// `sudo deevnet-kit selftest`.
+// `sudo tenant2backend selftest`.
 //
 // It leaves two log lines behind, one in the device partition and one in the
 // app partition, each saying it came from the self-test. They age out with
@@ -39,7 +39,7 @@ const selftestAccount = "kit-selftest"
 // How long a line may take to travel device -> broker -> bridge -> store.
 const selftestArrival = 45 * time.Second
 
-func (k *kit) selftestFile() string { return k.p("/var/lib/deevnet-kit/selftest.json") }
+func (k *kit) selftestFile() string { return k.p("/var/lib/backend/selftest.json") }
 
 type selftestResult struct {
 	At     time.Time `json:"at"`
@@ -113,7 +113,7 @@ func (k *kit) cmdSelftest() error {
 			return k.selftestDeviceLog(st, hc, logBase, marker)
 		}},
 		check{"app log: ingest token -> store", func() error {
-			body := fmt.Sprintf(`{"_msg":"deevnet-kit selftest %s-app","source":"deevnet-kit-selftest"}`, marker)
+			body := fmt.Sprintf(`{"_msg":"tenant2backend selftest %s-app","source":"backend-selftest"}`, marker)
 			req, _ := http.NewRequest(http.MethodPost, logBase+"/insert/jsonline", strings.NewReader(body))
 			req.Header.Set("Authorization", "Bearer "+st.IngestToken)
 			req.Header.Set("Content-Type", "application/stream+json")
@@ -206,7 +206,7 @@ func (k *kit) cmdSelftest() error {
 		}})
 	}
 
-	fmt.Printf("deevnet-kit selftest - tenant %s (index %d)\n\n", st.Tenant, st.Index)
+	fmt.Printf("tenant2backend selftest - tenant %s (index %d)\n\n", st.Tenant, st.Index)
 	res := selftestResult{At: time.Now().UTC(), Failed: []string{}}
 	for _, c := range checks {
 		if err := c.run(); err != nil {
@@ -251,7 +251,7 @@ func (k *kit) selftestDeviceLog(st state, hc *http.Client, logBase, marker strin
 
 	// _msg, not msg: LogsQL's phrase filter reads _msg, and the bridge fills
 	// _msg only when the payload has none.
-	msg := fmt.Sprintf(`{"_msg":"deevnet-kit selftest %s-device"}`, marker)
+	msg := fmt.Sprintf(`{"_msg":"tenant2backend selftest %s-device"}`, marker)
 	topic := fmt.Sprintf("%s/log/%s", st.Tenant, selftestAccount)
 	var last error
 	// Mosquitto reloads its password file on the signal the account write
@@ -259,7 +259,7 @@ func (k *kit) selftestDeviceLog(st state, hc *http.Client, logBase, marker strin
 	for i := 0; i < 5; i++ {
 		out, err := exec.Command("mosquitto_pub", "-h", st.name("mqtt"), "-p", fmt.Sprint(brokerPort),
 			"--cafile", k.caFile(), "-u", username(st, selftestAccount), "-P", pw,
-			"-i", "deevnet-kit-selftest", "-q", "1", "-t", topic, "-m", msg).CombinedOutput()
+			"-i", "backend-selftest", "-q", "1", "-t", topic, "-m", msg).CombinedOutput()
 		if err == nil {
 			last = nil
 			break
@@ -364,15 +364,15 @@ func mustHex(n int) string {
 func (k *kit) lastSelftest() string {
 	b, err := os.ReadFile(k.selftestFile())
 	if err != nil {
-		return "not run yet: sudo deevnet-kit selftest"
+		return "not run yet: sudo tenant2backend selftest"
 	}
 	var r selftestResult
 	if json.Unmarshal(b, &r) != nil {
-		return "unreadable result: sudo deevnet-kit selftest"
+		return "unreadable result: sudo tenant2backend selftest"
 	}
 	when := r.At.Local().Format("2006-01-02 15:04")
 	if len(r.Failed) == 0 {
 		return fmt.Sprintf("passed (%d checks) at %s", r.Passed, when)
 	}
-	return fmt.Sprintf("FAILED %d at %s: %s - sudo deevnet-kit selftest", len(r.Failed), when, strings.Join(r.Failed, "; "))
+	return fmt.Sprintf("FAILED %d at %s: %s - sudo tenant2backend selftest", len(r.Failed), when, strings.Join(r.Failed, "; "))
 }

@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// The owner's host name and Wi-Fi, from deevnet-kit.txt, applied once at first
+// The owner's host name and Wi-Fi, from backend.txt, applied once at first
 // boot. Imager offers no OS customization for a custom image, so without these
 // every card is raspberrypi.local and joins no Wi-Fi.
 
@@ -51,7 +51,7 @@ func (k *kit) applyHostname(name string) error {
 
 var loopback = regexp.MustCompile(`(?m)^127\.0\.1\.1\s.*$`)
 
-const wifiConnection = "deevnet-kit-wifi"
+const wifiConnection = "backend-wifi"
 
 // applyWiFi writes a NetworkManager connection for the owner's network, sets
 // the regulatory country, and then blanks wifi_psk in the boot config: the boot

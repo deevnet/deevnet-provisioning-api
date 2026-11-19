@@ -28,7 +28,7 @@ make site     # the documentation site (Hugo) into site/public
 make build    # static binary in bin/
 make image    # podman build localhost/deevnet-api:<version>
 make stage    # save the image under the Builder's artifact root (needs a clean, tagged tree)
-make stage-pi # deevnet-kit + deevnet-log-user for linux/arm64, for the image factory's pi-backend image
+make stage-pi # tenant2backend + deevnet-log-user for linux/arm64, for the image factory's pi-backend image
 make stage-vm # the same for linux/amd64, for the take-home VM image (CHG-0074)
 ```
 
@@ -121,7 +121,8 @@ make stage-vm # the same for linux/amd64, for the take-home VM image (CHG-0074)
 - **The log store's `auth.yml` has two authors.** Ansible owns `base.json`, the writer owns
   `users.d/<tenant>.json`, and `deevnet-log-user` renders the file from both. Don't make either side
   write `auth.yml` directly.
-- **`cmd/deevnet-kit` is the API's stand-in on a take-home Pi** (Mosquitto, VictoriaLogs, vmauth, the
+- **`cmd/tenant2backend` is the API's stand-in on a take-home backend** (named `deevnet-kit` until
+  ADR-0045; its files take the noun `backend`, and the app contract keeps Deevnet's names) (Mosquitto, VictoriaLogs, vmauth, the
   log bridge, and since CHG-0072 the metrics store, vmalert, Alertmanager and ntfy). It sends
   `deevnet-log-user` the API's own `alerts` request for rules exported from the tenant's
   Terraform: don't give the kit an alerting path of its own. It lives here so it imports `brokeracct` and `tenant` rather than copying their rules,

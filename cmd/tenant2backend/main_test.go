@@ -20,7 +20,7 @@ func testKit(t *testing.T) *kit {
 
 func bootConfig(t *testing.T, body string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "deevnet-kit.txt")
+	p := filepath.Join(t.TempDir(), "backend.txt")
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestInitWritesGrafanaSecretsAndKitEnvWaitsForTheOrg(t *testing.T) {
 		"GRAFANA_AUTH=bench1:" + st.DashboardPassword + "\n",
 		"GRAFANA_ORG_ID=2\n",
 		"TF_VAR_grafana_org_id=2\n",
-		"GRAFANA_CA_CERT=deevnet-kit-ca.pem\n",
+		"GRAFANA_CA_CERT=backend-ca.pem\n",
 	} {
 		if !strings.Contains(env, want) {
 			t.Errorf("kit.env lacks %q", want)

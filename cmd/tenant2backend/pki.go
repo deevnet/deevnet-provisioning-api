@@ -173,20 +173,20 @@ func (k *kit) pkiCA(w io.Writer, mode string, args []string) error {
 	}
 	fmt.Fprintf(w, "\nYour issuing CA, %s, is on this Pi; your root stays on the stick.\n", issuing.Subject.CommonName)
 	if st.owner() {
-		fmt.Fprintln(w, "This Pi already serves on your root: run sudo deevnet-kit pki switch to reissue its certificate from the new issuing CA.")
+		fmt.Fprintln(w, "This Pi already serves on your root: run sudo tenant2backend pki switch to reissue its certificate from the new issuing CA.")
 		return nil
 	}
 	// A new card for a Pi that already left: its devices hold the owner's
 	// root, so there is no bundle to hand out first.
 	if mode == "issuing" {
 		fmt.Fprintln(w, "Nothing this Pi serves has changed yet. Devices that already trust your root need nothing new:")
-		fmt.Fprintln(w, "  sudo deevnet-kit pki switch, then restore their broker accounts (deevnet-kit account add --password-file).")
+		fmt.Fprintln(w, "  sudo tenant2backend pki switch, then restore their broker accounts (tenant2backend account add --password-file).")
 		return nil
 	}
 	fmt.Fprintln(w, "Nothing this Pi serves has changed yet. Next:")
-	fmt.Fprintf(w, "  1. sudo deevnet-kit export DIR writes %s: the root trusted now and yours.\n", trustBundleName)
+	fmt.Fprintf(w, "  1. sudo tenant2backend export DIR writes %s: the root trusted now and yours.\n", trustBundleName)
 	fmt.Fprintln(w, "     Give it to every device and computer that talks to this Pi, in place of the CA file they have.")
-	fmt.Fprintln(w, "  2. Then: sudo deevnet-kit pki switch. Devices given the bundle keep working across it.")
+	fmt.Fprintln(w, "  2. Then: sudo tenant2backend pki switch. Devices given the bundle keep working across it.")
 	fmt.Fprintf(w, "  3. Once every device holds it, export again and give them %s alone.\n", ownerRootExportName)
 	return nil
 }
@@ -234,10 +234,10 @@ func (k *kit) pkiSwitch(w io.Writer) error {
 		return err
 	}
 	if !k.ownerReady() {
-		return errors.New("no issuing CA of yours is on this Pi: run deevnet-kit pki init first")
+		return errors.New("no issuing CA of yours is on this Pi: run tenant2backend pki init first")
 	}
 	if st.owner() {
-		return errors.New("this Pi already serves on your root; to reissue its certificate: sudo deevnet-kit regen-certs")
+		return errors.New("this Pi already serves on your root; to reissue its certificate: sudo tenant2backend regen-certs")
 	}
 	if _, err := k.checkOwnerCA(); err != nil {
 		return err
@@ -277,7 +277,7 @@ func (k *kit) pkiSwitch(w io.Writer) error {
 	case was == pkiDeevnet:
 		fmt.Fprintf(w, "it no longer answers to its names under %s\n", st.tenantDomain())
 	}
-	fmt.Fprintf(w, "once every device holds your root: sudo deevnet-kit export DIR, and give them %s alone\n", ownerRootExportName)
+	fmt.Fprintf(w, "once every device holds your root: sudo tenant2backend export DIR, and give them %s alone\n", ownerRootExportName)
 	return k.restartForCert()
 }
 
@@ -418,7 +418,7 @@ func (k *kit) pkiEnroll(w io.Writer, args []string) error {
 		return errors.New("pki enroll DEVICE --out DIR [--csr FILE]")
 	}
 	if !k.ownerReady() {
-		return errors.New("no issuing CA of yours is on this Pi: run deevnet-kit pki init first")
+		return errors.New("no issuing CA of yours is on this Pi: run tenant2backend pki init first")
 	}
 	argv := []string{k.ownerTool(), "leaf", "device", "--ca", k.ownerDir(), "--out", *out, "--name", device}
 	if *csr != "" {
@@ -498,7 +498,7 @@ func (k *kit) ownerCertWarning() (string, error) {
 	if len(private) == 0 {
 		return "", nil
 	}
-	return fmt.Sprintf("the certificate does not name %v; a device dialling it will fail: sudo deevnet-kit regen-certs", private), nil
+	return fmt.Sprintf("the certificate does not name %v; a device dialling it will fail: sudo tenant2backend regen-certs", private), nil
 }
 
 type multiFlag []string

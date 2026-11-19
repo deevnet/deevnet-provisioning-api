@@ -73,7 +73,7 @@ func (k *kit) selftestAlerting(st state, hc *http.Client, marker string) []check
 		}},
 		{"ntfy: the phone's login reads its own topics", func() error {
 			if st.NotifyPassword == "" {
-				return errors.New("no login yet: systemctl status deevnet-kit-alerting")
+				return errors.New("no login yet: systemctl status backend-alerting")
 			}
 			code, err := ntfyDo(hc, http.MethodGet, ntfyBase+"/"+topic+"/json?poll=1", st.Tenant, st.NotifyPassword, "")
 			if err != nil {
@@ -86,9 +86,9 @@ func (k *kit) selftestAlerting(st state, hc *http.Client, marker string) []check
 		}},
 		{"ntfy: the phone's login publishes nowhere", func() error {
 			if st.NotifyPassword == "" {
-				return errors.New("no login yet: systemctl status deevnet-kit-alerting")
+				return errors.New("no login yet: systemctl status backend-alerting")
 			}
-			code, err := ntfyDo(hc, http.MethodPost, ntfyBase+"/"+topic, st.Tenant, st.NotifyPassword, "deevnet-kit selftest "+marker)
+			code, err := ntfyDo(hc, http.MethodPost, ntfyBase+"/"+topic, st.Tenant, st.NotifyPassword, "tenant2backend selftest "+marker)
 			if err != nil {
 				return err
 			}
