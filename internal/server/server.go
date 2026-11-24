@@ -47,6 +47,12 @@ type Config struct {
 	// SecretsLoaded reports whether the API has read what it needs from
 	// OpenBao at startup. Until it has, /v1 answers 503. Nil means it has.
 	SecretsLoaded func() bool
+	// Egress lists the ready tenants' VRFs from the registry alone. Set, it
+	// serves GET /v1/fabric/egress outside the secrets gate, so the exit
+	// node's agent reads its list while OpenBao is sealed (INC-0007): it is the
+	// one thing running that reads the API, and the list needs no secret. Nil,
+	// the route is the tenant service's, behind the gate like the rest of /v1.
+	Egress func(ctx context.Context) ([]tenant.EgressVRF, error)
 }
 
 func New(cfg Config) http.Handler {
@@ -74,6 +80,15 @@ func New(cfg Config) http.Handler {
 	}
 	v1.HandleFunc("/v1/", knownCaller(notImplemented))
 	mux.Handle("/v1/", requireToken(requireMigrated(cfg.Migrated, requireSecrets(cfg.SecretsLoaded, identify(cfg.Token, cfg.AgentToken, cfg.Tenants, v1)))))
+	if cfg.Egress != nil {
+		// More specific than "/v1/", so it is matched first. Not behind
+		// requireSecrets: the operator's and the agent's tokens are checked
+		// against the environment, and a tenant's, which needs OpenBao, is
+		// refused here anyway. Until the tenant service is built, a tenant token
+		// is simply unknown: 401, where it is 403 once OpenBao has opened.
+		mux.Handle("GET /v1/fabric/egress", requireToken(requireMigrated(cfg.Migrated,
+			identify(cfg.Token, cfg.AgentToken, cfg.Tenants, egressReader(egressList(cfg.Egress, cfg.Logger))))))
+	}
 
 	return logRequests(cfg.Logger, mux)
 }
@@ -160,6 +175,19 @@ func versionInfo(w http.ResponseWriter, _ *http.Request) {
 		"commit":  version.Commit,
 		"built":   version.Built,
 	})
+}
+
+// egressList answers the exit node's agent from the registry (Config.Egress).
+func egressList(list func(ctx context.Context) ([]tenant.EgressVRF, error), logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vrfs, err := list(r.Context())
+		if err != nil {
+			logger.Error("request failed", "err", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"vrfs": vrfs})
+	}
 }
 
 func notImplemented(w http.ResponseWriter, _ *http.Request) {

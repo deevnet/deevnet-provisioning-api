@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -458,6 +459,61 @@ func TestTheEgressAgentReadsOnlyTheVRFList(t *testing.T) {
 	h2, _, _ := tenantServer(t)
 	if rec, _ := callAs(t, h2, "agent-token", http.MethodGet, "/v1/fabric/egress", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no agent configured: %d, want 401", rec.Code)
+	}
+}
+
+// INC-0007: the API started with OpenBao sealed, so the tenant service was never
+// built and /v1 answered 503 - the egress agent's list included, though it needs
+// no secret. With Config.Egress the list is read from the registry and served
+// outside the gate; everything else under /v1 still waits for OpenBao.
+func TestTheEgressListAnswersWhileOpenBaoIsSealed(t *testing.T) {
+	svc, _, _ := tenanttest.NewService()
+	svc.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Register a tenant through a server that has OpenBao, then serve the
+	// same registry from one that does not.
+	open := New(Config{Token: "s3cret", DB: fakeDB{}, Logger: svc.Logger, Tenants: svc})
+	if rec, out := call(t, open, http.MethodPost, "/v1/tenants", `{"name":"eds"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %v", rec.Code, out)
+	}
+	sealed := New(Config{
+		Token: "s3cret", AgentToken: "agent-token", DB: fakeDB{}, Logger: svc.Logger,
+		SecretsLoaded: func() bool { return false },
+		Egress: func(ctx context.Context) ([]tenant.EgressVRF, error) {
+			return tenant.ListEgress(ctx, svc.Store)
+		},
+	})
+
+	for _, tok := range []string{"agent-token", "s3cret"} {
+		rec, out := callAs(t, sealed, tok, http.MethodGet, "/v1/fabric/egress", "")
+		vrfs, _ := out["vrfs"].([]any)
+		if rec.Code != http.StatusOK || len(vrfs) != 1 {
+			t.Fatalf("sealed, %s reads the list: %d %v", tok, rec.Code, out)
+		}
+	}
+	// The rest of /v1 still waits.
+	if rec, _ := call(t, sealed, http.MethodGet, "/v1/tenants", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("sealed, GET /v1/tenants: %d, want 503", rec.Code)
+	}
+	// No token, or one it does not know (a tenant's cannot be checked yet): 401.
+	if rec, _ := callAs(t, sealed, "", http.MethodGet, "/v1/fabric/egress", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("sealed, no token: %d, want 401", rec.Code)
+	}
+	if rec, _ := callAs(t, sealed, "dvt1.eds.x.y", http.MethodGet, "/v1/fabric/egress", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("sealed, other token: %d, want 401", rec.Code)
+	}
+	// Writing is not reading: only GET is outside the gate.
+	if rec, _ := callAs(t, sealed, "agent-token", http.MethodPost, "/v1/fabric/egress", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("sealed, POST: %d, want 503", rec.Code)
+	}
+	// An unmigrated database still answers 503.
+	unmigrated := New(Config{
+		Token: "s3cret", AgentToken: "agent-token", DB: fakeDB{}, Logger: svc.Logger,
+		Migrated:      func() bool { return false },
+		SecretsLoaded: func() bool { return false },
+		Egress:        func(context.Context) ([]tenant.EgressVRF, error) { return nil, nil },
+	})
+	if rec, _ := callAs(t, unmigrated, "agent-token", http.MethodGet, "/v1/fabric/egress", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("unmigrated: %d, want 503", rec.Code)
 	}
 }
 
