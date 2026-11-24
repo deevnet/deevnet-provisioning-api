@@ -8,6 +8,8 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.28.1 (2026-11-23)
+
 ### Fixed
 
 - **`GET /v1/fabric/egress` answers while OpenBao is sealed** (INC-0007). After a start with
