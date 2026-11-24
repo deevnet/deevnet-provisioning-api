@@ -877,10 +877,24 @@ type EgressVRF struct {
 
 // Egress lists the VRFs of every ready tenant, for the exit node's agent.
 func (s *Service) Egress(ctx context.Context) ([]EgressVRF, error) {
-	recs, err := s.List(ctx)
+	return ListEgress(ctx, s.Store)
+}
+
+// RecordLister is all ListEgress needs from a store.
+type RecordLister interface {
+	List(ctx context.Context) ([]Record, error)
+}
+
+// ListEgress lists the VRFs of every ready tenant, in index order. It reads the
+// registry and nothing else - no secret, no backend - so the API answers the
+// exit node's agent before it has read OpenBao, and while OpenBao is sealed
+// (INC-0007). The agent's list is the only thing running that reads the API.
+func ListEgress(ctx context.Context, l RecordLister) ([]EgressVRF, error) {
+	recs, err := l.List(ctx)
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(recs, func(i, j int) bool { return recs[i].Index < recs[j].Index })
 	out := make([]EgressVRF, 0, len(recs))
 	for _, r := range recs {
 		if r.Status == StatusReady {

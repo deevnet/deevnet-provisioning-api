@@ -1739,6 +1739,11 @@ paths:
 
         The exit node's agent reads this and renders the VRF default routes. The agent token
         reads this one route and nothing else, so the exit node holds no operator credential.
+
+        **Answers while OpenBao is sealed.** The list is read from the registry alone, so this
+        route does not wait for OpenBao as the rest of `/v1` does (INC-0007): the agent is the one
+        thing running that reads the API. Until the API has read OpenBao, a tenant's token cannot
+        be checked, so it is answered 401 here rather than 403.
       responses:
         "200":
           description: The VRFs.

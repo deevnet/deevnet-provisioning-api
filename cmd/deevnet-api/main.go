@@ -98,6 +98,10 @@ func run(logger *slog.Logger) error {
 		AgentToken: os.Getenv("DEEVNET_AGENT_TOKEN"),
 		DB:         pool,
 		Logger:     logger,
+		// From the registry alone, before and without OpenBao (INC-0007).
+		Egress: func(ctx context.Context) ([]tenant.EgressVRF, error) {
+			return tenant.ListEgress(ctx, reg)
+		},
 	}
 	if health != nil {
 		cfg.Secrets = health

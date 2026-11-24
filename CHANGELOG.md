@@ -8,6 +8,15 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+### Fixed
+
+- **`GET /v1/fabric/egress` answers while OpenBao is sealed** (INC-0007). After a start with
+  OpenBao sealed, which is every start outside a work session, every `/v1` route answered 503
+  until OpenBao opened, the exit node's egress agent's list among them, though it needs no secret.
+  The list is now read from the registry alone and served outside that gate; everything else
+  under `/v1` still waits for OpenBao. While it is sealed, a tenant's token on this route is
+  answered 401, not 403.
+
 ## 0.28.0 (2026-11-19)
 
 ### Changed
