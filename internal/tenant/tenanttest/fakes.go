@@ -1069,6 +1069,8 @@ func MobileSite() tenant.Site {
 		TemplatePrefix:    "fedora-server-",
 		Storage:           "local-lvm",
 		Disk:              "scsi0",
+		SCSIHW:            "virtio-scsi-single",
+		DiskOptions:       "iothread=1,discard=on,cache=none",
 		CIUser:            "a_autoprov",
 		TrustClasses: map[string]tenant.TrustClass{
 			"iot":        {Name: "iot", SSID: "DVNTM-IOT", VLAN: 30},

@@ -202,6 +202,11 @@ type Site struct {
 	TemplatePrefix string
 	Storage        string
 	Disk           string
+	// The VM hardware profile (ADR-0046), from inventory: the disk controller
+	// and the options of Disk, e.g. "iothread=1,discard=on,cache=none". A new
+	// workload is put on it before its first start.
+	SCSIHW      string
+	DiskOptions string
 	// The account cloud-init creates for the tenant's keys.
 	CIUser string
 }
@@ -237,6 +242,8 @@ func (s Site) Validate() error {
 		return fmt.Errorf("template prefix is required")
 	case s.Disk == "":
 		return fmt.Errorf("the disk to grow is required")
+	case s.SCSIHW == "" || s.DiskOptions == "":
+		return fmt.Errorf("the VM hardware profile (disk controller and disk options) is required")
 	}
 	// Trust classes are optional, but a half-declared one would bind a key to
 	// the wrong place, so a declared one has to be complete.

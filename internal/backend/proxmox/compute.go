@@ -58,7 +58,58 @@ func (c *Client) EnsureWorkload(ctx context.Context, w tenant.WorkloadSpec) erro
 	if err := c.postTask(ctx, w.Node, fmt.Sprintf("/nodes/%s/qemu/%d/clone", url.PathEscape(w.Node), tmpl), clone); err != nil {
 		return fmt.Errorf("clone %d into %d: %w", tmpl, w.VMID, err)
 	}
+	if err := c.profileWorkload(ctx, w); err != nil {
+		return err
+	}
 	return c.configureWorkload(ctx, w, true)
+}
+
+// profileWorkload puts a VM just cloned on the site's VM hardware profile
+// (ADR-0046) before its first start: the disk controller, and the options of
+// the disk the workload boots from. A clone inherits the template's, and a
+// template built before the profile is on LSI (INC-0006).
+//
+// Only a new clone: an adopted VM's hardware is never changed here. A running
+// VM would hold the change pending until some later restart, which no one
+// chose; moving an existing workload is a change record.
+func (c *Client) profileWorkload(ctx context.Context, w tenant.WorkloadSpec) error {
+	var cfg map[string]any
+	path := fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(w.Node), w.VMID)
+	if err := c.get(ctx, path, &cfg); err != nil {
+		return fmt.Errorf("read %d's configuration: %w", w.VMID, err)
+	}
+	drive, _ := cfg[w.Disk].(string)
+	if drive == "" {
+		return fmt.Errorf("profile %d: the clone has no %s", w.VMID, w.Disk)
+	}
+	if err := c.post(ctx, path, map[string]string{
+		"scsihw": w.SCSIHW,
+		w.Disk:   profileDrive(drive, w.DiskOptions),
+	}); err != nil {
+		return fmt.Errorf("profile %d: %w", w.VMID, err)
+	}
+	return nil
+}
+
+// profileDrive keeps a drive's volume and every option the profile does not
+// set (its size among them), and gives it the profile's options:
+// "local-lvm:vm-2040-disk-0,size=32G" with "iothread=1,discard=on" becomes
+// "local-lvm:vm-2040-disk-0,size=32G,iothread=1,discard=on".
+func profileDrive(drive, options string) string {
+	parts := strings.Split(drive, ",")
+	set := map[string]bool{}
+	for _, o := range strings.Split(options, ",") {
+		k, _, _ := strings.Cut(o, "=")
+		set[k] = true
+	}
+	out := []string{parts[0]}
+	for _, p := range parts[1:] {
+		k, _, _ := strings.Cut(p, "=")
+		if !set[k] {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(append(out, strings.Split(options, ",")...), ",")
 }
 
 func (c *Client) configureWorkload(ctx context.Context, w tenant.WorkloadSpec, start bool) error {
