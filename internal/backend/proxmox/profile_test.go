@@ -33,10 +33,11 @@ func TestProfileDrive(t *testing.T) {
 // fakeNode answers just enough of the PVE API for EnsureWorkload, and records
 // every write in order.
 type fakeNode struct {
-	vms    []map[string]any
-	config map[string]any
-	mu     sync.Mutex
-	writes []string // "<path> <form>"
+	vms          []map[string]any
+	config       map[string]any
+	ignoreConfig bool
+	mu           sync.Mutex
+	writes       []string // "<path> <form>"
 }
 
 func (f *fakeNode) handler(t *testing.T) http.Handler {
@@ -50,13 +51,26 @@ func (f *fakeNode) handler(t *testing.T) http.Handler {
 			_ = r.ParseForm()
 			f.mu.Lock()
 			f.writes = append(f.writes, p+" "+r.PostForm.Encode())
+			// A node applies a configuration write, unless it is told to
+			// accept and ignore it.
+			if strings.HasSuffix(p, "/config") && !f.ignoreConfig {
+				for k := range r.PostForm {
+					f.config[k] = r.PostForm.Get(k)
+				}
+			}
 			f.mu.Unlock()
 		}
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/qemu"):
 			reply(f.vms)
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/config"):
-			reply(f.config)
+			f.mu.Lock()
+			cfg := map[string]any{}
+			for k, v := range f.config {
+				cfg[k] = v
+			}
+			f.mu.Unlock()
+			reply(cfg)
 		case r.Method == http.MethodGet && strings.Contains(p, "/tasks/"):
 			reply(map[string]string{"status": "stopped", "exitstatus": "OK"})
 		case strings.HasSuffix(p, "/clone"), strings.HasSuffix(p, "/status/start"):
@@ -125,5 +139,39 @@ func TestAdoptedWorkloadKeepsItsHardware(t *testing.T) {
 		if strings.Contains(wr, "scsihw=") || strings.Contains(wr, "scsi0=") {
 			t.Fatalf("an adopted workload's hardware was written: %s", wr)
 		}
+	}
+}
+
+// A node that accepts the profile but does not apply it leaves the workload
+// unstarted, with an error naming what is off the profile.
+func TestWorkloadOffTheProfileIsNotStarted(t *testing.T) {
+	f := &fakeNode{
+		vms:          []map[string]any{{"vmid": 102, "name": "fedora-tenant-44-1.7", "template": 1, "status": "stopped"}},
+		config:       map[string]any{"scsihw": "lsi", "scsi0": "local-lvm:vm-2040-disk-0,size=32G"},
+		ignoreConfig: true,
+	}
+	srv := httptest.NewServer(f.handler(t))
+	defer srv.Close()
+	c := New(srv.URL, "t@pve!x", "s", tenanttest.MobileSite(), false)
+	err := c.EnsureWorkload(context.Background(), workload())
+	if err == nil || !strings.Contains(err.Error(), "not on the profile") || !strings.Contains(err.Error(), "scsihw") {
+		t.Fatalf("want an error naming the controller, got %v", err)
+	}
+	for _, wr := range f.writes {
+		if strings.HasSuffix(strings.Fields(wr)[0], "/status/start") {
+			t.Fatalf("a workload off the profile was started: %q", f.writes)
+		}
+	}
+}
+
+func TestOffProfile(t *testing.T) {
+	w := workload()
+	on := map[string]any{"scsihw": w.SCSIHW, "scsi0": "local-lvm:vm-2040-disk-0,size=32G," + w.DiskOptions}
+	if d := offProfile(on, w); len(d) != 0 {
+		t.Errorf("on the profile, got %q", d)
+	}
+	off := map[string]any{"scsihw": "lsi", "scsi0": "local-lvm:vm-2040-disk-0,size=32G,iothread=1"}
+	if d := offProfile(off, w); len(d) != 3 {
+		t.Errorf("want scsihw, discard and cache named, got %q", d)
 	}
 }

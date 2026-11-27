@@ -88,7 +88,39 @@ func (c *Client) profileWorkload(ctx context.Context, w tenant.WorkloadSpec) err
 	}); err != nil {
 		return fmt.Errorf("profile %d: %w", w.VMID, err)
 	}
+	// Read back before the first start: a write the node accepted but did not
+	// apply would otherwise leave a workload running off the profile.
+	cfg = nil
+	if err := c.get(ctx, path, &cfg); err != nil {
+		return fmt.Errorf("read back %d's configuration: %w", w.VMID, err)
+	}
+	if diffs := offProfile(cfg, w); len(diffs) > 0 {
+		return fmt.Errorf("profile %d: not on the profile after it was set: %s", w.VMID, strings.Join(diffs, "; "))
+	}
 	return nil
+}
+
+// offProfile names each way a workload's configuration differs from the
+// profile it was given: its controller, and each of the profile's options on
+// the disk it boots from. Nothing, when it is on the profile.
+func offProfile(cfg map[string]any, w tenant.WorkloadSpec) []string {
+	var diffs []string
+	if got, _ := cfg["scsihw"].(string); got != w.SCSIHW {
+		diffs = append(diffs, fmt.Sprintf("scsihw is %q, profile %q", got, w.SCSIHW))
+	}
+	drive, _ := cfg[w.Disk].(string)
+	have := map[string]string{}
+	for _, p := range strings.Split(drive, ",")[1:] {
+		k, v, _ := strings.Cut(p, "=")
+		have[k] = v
+	}
+	for _, o := range strings.Split(w.DiskOptions, ",") {
+		k, v, _ := strings.Cut(o, "=")
+		if have[k] != v {
+			diffs = append(diffs, fmt.Sprintf("%s %s is %q, profile %q", w.Disk, k, have[k], v))
+		}
+	}
+	return diffs
 }
 
 // profileDrive keeps a drive's volume and every option the profile does not
