@@ -8,6 +8,21 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+### Changed
+
+- **A new workload is put on the site's VM hardware profile before its first start** (ADR-0046,
+  INC-0006). After the clone the API sets the disk controller and the options of the disk it
+  boots from, keeping the drive's volume and size, so a workload no longer inherits whatever the
+  template had (LSI, for templates built before the profile). An existing workload's hardware is
+  never changed: on a running VM the change would wait for some later restart, and moving one is
+  the operator's change.
+
+### Upgrading
+
+- **Two new required variables:** `DEEVNET_TENANT_SCSIHW` (e.g. `virtio-scsi-single`) and
+  `DEEVNET_TENANT_DISK_OPTIONS` (e.g. `iothread=1,discard=on,cache=none`). The `deevnet_api` role
+  sets them from inventory's `deevnet_vm_profile`. Without them the API refuses to serve tenants.
+
 ## 0.28.1 (2026-11-23)
 
 ### Fixed

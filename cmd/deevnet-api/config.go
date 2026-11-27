@@ -50,6 +50,8 @@ var siteEnv = []string{
 	"DEEVNET_TEMPLATE_PREFIX",
 	"DEEVNET_TENANT_STORAGE",
 	"DEEVNET_TENANT_DISK",
+	"DEEVNET_TENANT_SCSIHW",
+	"DEEVNET_TENANT_DISK_OPTIONS",
 	"DEEVNET_TENANT_CIUSER",
 }
 
@@ -375,6 +377,8 @@ func tenantService(ctx context.Context, getenv func(string) string) (wiring, err
 		TemplatePrefix:    getenv("DEEVNET_TEMPLATE_PREFIX"),
 		Storage:           getenv("DEEVNET_TENANT_STORAGE"),
 		Disk:              getenv("DEEVNET_TENANT_DISK"),
+		SCSIHW:            getenv("DEEVNET_TENANT_SCSIHW"),
+		DiskOptions:       getenv("DEEVNET_TENANT_DISK_OPTIONS"),
 		CIUser:            getenv("DEEVNET_TENANT_CIUSER"),
 	}
 	if getenv("OMADA_API_URL") != "" {

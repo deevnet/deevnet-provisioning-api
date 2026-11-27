@@ -777,6 +777,8 @@ func (s *Service) workloadSpec(rec Record, w Workload) WorkloadSpec {
 		MemoryMB:       w.MemoryMB,
 		DiskGB:         w.DiskGB,
 		Disk:           s.Site.Disk,
+		SCSIHW:         s.Site.SCSIHW,
+		DiskOptions:    s.Site.DiskOptions,
 		Storage:        s.Site.Storage,
 		CIUser:         s.Site.CIUser,
 		SSHKeys:        w.SSHKeys,

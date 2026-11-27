@@ -633,6 +633,8 @@ type WorkloadSpec struct {
 	MemoryMB       int
 	DiskGB         int
 	Disk           string // which disk to grow, e.g. scsi0
+	SCSIHW         string // the profile's disk controller (ADR-0046)
+	DiskOptions    string // the profile's options for Disk, e.g. iothread=1,discard=on,cache=none
 	Storage        string
 	CIUser         string
 	SSHKeys        []string

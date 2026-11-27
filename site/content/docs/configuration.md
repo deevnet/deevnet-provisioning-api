@@ -48,6 +48,7 @@ and the service refuses to start if any is empty.
 | `DEEVNET_MAC_NAMESPACE` | `02:de:20` | prefix of the MAC a workload derives from its VMID |
 | `DEEVNET_TEMPLATE_PREFIX` | `fedora-server-` | the newest template matching it is cloned |
 | `DEEVNET_TENANT_STORAGE`, `DEEVNET_TENANT_DISK` | `local-lvm`, `scsi0` | where a workload lands, and the disk grown |
+| `DEEVNET_TENANT_SCSIHW`, `DEEVNET_TENANT_DISK_OPTIONS` | `virtio-scsi-single`, `iothread=1,discard=on,cache=none` | the VM hardware profile (ADR-0046): the disk controller and the options of `DEEVNET_TENANT_DISK`, set on a new workload before its first start. Required |
 | `DEEVNET_TENANT_CIUSER` | | the account a workload's keys go to, reported as `login_user` |
 
 ## Secret store

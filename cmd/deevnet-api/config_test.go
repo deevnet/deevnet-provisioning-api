@@ -54,6 +54,8 @@ func fullEnv() map[string]string {
 		"DEEVNET_TEMPLATE_PREFIX":     "fedora-server-",
 		"DEEVNET_TENANT_STORAGE":      "local-lvm",
 		"DEEVNET_TENANT_DISK":         "scsi0",
+		"DEEVNET_TENANT_SCSIHW":       "virtio-scsi-single",
+		"DEEVNET_TENANT_DISK_OPTIONS": "iothread=1,discard=on,cache=none",
 		"DEEVNET_TENANT_CIUSER":       "a_autoprov",
 	}
 }
