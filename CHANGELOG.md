@@ -8,6 +8,8 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.29.0 (2026-11-27)
+
 ### Changed
 
 - **A new workload is put on the site's VM hardware profile before its first start** (ADR-0046,
