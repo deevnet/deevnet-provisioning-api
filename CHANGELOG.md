@@ -8,6 +8,15 @@ One tag covers everything this repository builds: the API, the two writers
 
 ## Unreleased
 
+## 0.30.0 (2026-11-27)
+
+### Changed
+
+- **A new workload's hardware is read back and checked before its first start** (ADR-0046). After
+  putting a clone on the profile the API reads its configuration again; if the controller or any of
+  the profile's options on its boot disk is not what was set, the workload is not started and the
+  error names each difference.
+
 ## 0.29.0 (2026-11-27)
 
 ### Changed
